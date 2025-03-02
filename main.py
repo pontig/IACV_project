@@ -8,7 +8,7 @@ import open3d as o3d
 
 from camera_info import Camera_info
 
-MAIN_CAMERA = 0
+MAIN_CAMERA = 3
 SECONDARY_CAMERA = 2
 
 def interpolate_trajectory(detections, time_stamps):
@@ -152,41 +152,132 @@ def load_dataframe(cameras):
     print("Done")
     return df, splines, contiguous, camera_info
 
-def estimate_time_shift(F, xi, xk, vk):
+def estimate_time_shift(F, xi, xk, vk, max_iterations=1000, threshold=0.1, min_inliers=10):
     """
     Estimate the time shift between two cameras using RANSAC.
     
-    F: Fundamental matrix
-    xi: Points from camera i
-    xk: Points from camera k
-    vk: Velocities from camera k
+    Parameters:
+    -----------
+    F : ndarray
+        Fundamental matrix
+    xi : ndarray
+        Points from camera i (N x 2)
+    xk : ndarray
+        Points from camera k (N x 2)
+    vk : ndarray
+        Velocities from camera k (N x 2)
+    max_iterations : int, optional
+        Maximum number of RANSAC iterations
+    threshold : float, optional
+        Threshold for considering a point as an inlier
+    min_inliers : int, optional
+        Minimum number of inliers required for a model to be considered valid
     
-    Returns: Time shift beta and inliers
+    Returns:
+    --------
+    float
+        Estimated time shift (beta) between cameras
+    list
+        Indices of inliers
     """
+    import numpy as np
+    import random
+    import matplotlib.pyplot as plt
+    from tqdm import tqdm
     
-    beta_values = []
+    # Make sure all inputs are numpy arrays
+    xi = np.array(xi)
+    xk = np.array(xk)
+    vk = np.array(vk)
     
-    for x1, x2, v2 in zip(xi, xk, vk):
-        x1_h = np.append(x1, 1)
-        x2_h = np.append(x2, 1)
-        v2_h = np.append(v2, 0)
+    if len(xi) < 3:
+        raise ValueError("Need at least 3 point correspondences")
+    
+    best_beta = 0
+    best_inliers = []
+    best_inlier_count = 0
+    
+    # Calculate all possible beta values for later evaluation
+    all_beta_values = []
+    for i in range(len(xi)):
+        x1_h = np.append(xi[i], 1)  # Homogeneous coordinates for point in camera i
+        x2_h = np.append(xk[i], 1)  # Homogeneous coordinates for point in camera k
+        v2_h = np.append(vk[i], 0)  # Homogeneous coordinates for velocity (append 0)
         
         numerator = np.dot(x2_h.T, np.dot(F, x1_h))
         denominator = np.dot(v2_h.T, np.dot(F, x1_h))
         
         if np.abs(denominator) > 1e-6:  # Avoid division by zero
             beta_ik = -numerator / denominator
-            beta_values.append(beta_ik)
-            
-    # Plot all beta values
-    plt.figure()
-    plt.plot(beta_values)
-    plt.hlines(np.median(beta_values), 0, len(beta_values), colors='r', linestyles='dashed')
-    plt.title("Beta values")
-    plt.xlabel("Correspondence index")
-    plt.ylabel("Beta")
+            all_beta_values.append((i, beta_ik))
     
-    return np.median(beta_values) 
+    # RANSAC implementation
+    for _ in (range(max_iterations)):
+        # 1. Randomly select a sample of 3 correspondences
+        if len(all_beta_values) < 3:
+            continue
+            
+        sample_indices = random.sample(range(len(all_beta_values)), 3)
+        sample_betas = [all_beta_values[i][1] for i in sample_indices]
+        
+        # 2. Compute model from the sample (median beta value)
+        model_beta = np.median(sample_betas)
+        
+        # Skip if the model is invalid
+        if np.isnan(model_beta) or np.isinf(model_beta) or np.abs(model_beta) > 10:
+            continue
+        
+        # 3. Calculate inliers based on reprojection error
+        inliers = []
+        for idx, beta_val in all_beta_values:
+            # Calculate error as the difference between predicted beta and actual beta
+            error = np.abs(beta_val - model_beta)
+            if error < threshold:
+                inliers.append(idx)
+        
+        # 4. Save the model if it has more inliers
+        if len(inliers) > best_inlier_count and len(inliers) >= min_inliers:
+            best_inlier_count = len(inliers)
+            best_inliers = inliers
+            
+            # Recalculate beta using all inliers
+            inlier_betas = [all_beta_values[i][1] for i in range(len(all_beta_values)) if all_beta_values[i][0] in inliers]
+            best_beta = np.median(inlier_betas)
+    
+    # If RANSAC failed to find a good model, use median of all values
+    if not best_inliers:
+        print("RANSAC could not find a consistent model. Using median of all beta values.")
+        best_beta = np.median([b for _, b in all_beta_values])
+        best_inliers = list(range(len(xi)))
+    
+    # # Plot results
+    # plt.figure(figsize=(12, 6))
+    
+    # # Plot all beta values
+    # all_betas = [b for _, b in all_beta_values]
+    # plt.subplot(2, 1, 1)
+    # plt.plot(all_betas, 'o', alpha=0.5, label='All beta values')
+    # plt.axhline(y=best_beta, color='r', linestyle='--', label=f'Best beta = {best_beta:.4f}')
+    # plt.title(f"Time Shift Estimation (RANSAC): {len(best_inliers)} inliers out of {len(all_beta_values)} points")
+    # plt.ylabel("Beta")
+    # plt.legend()
+    
+    # # Plot histogram of beta values
+    # plt.subplot(2, 1, 2)
+    # plt.hist(all_betas, bins=30, alpha=0.7)
+    # plt.axvline(x=best_beta, color='r', linestyle='--', label=f'Best beta = {best_beta:.4f}')
+    # plt.xlabel("Beta value")
+    # plt.ylabel("Frequency")
+    # plt.legend()
+    
+    # plt.tight_layout()
+    # plt.savefig('time_shift_estimation.png')
+    # plt.show()
+    
+    # print(f"Best beta: {best_beta}")
+    # print(f"Number of inliers: {len(best_inliers)} out of {len(xi)} points")
+    
+    return best_beta
 
 def triangulate_points(P1, P2, pts1, pts2, K1, K2):
     """
@@ -329,6 +420,31 @@ def visualize_configuration(R, t, K1, K2, pts1, pts2, config_name):
     
     return n_in_front, pts_3d_valid
 
+def show_splines(splines):
+    """ Visualize the 3D splines using o3d """
+    # Splines is a list of (spline_x, spline_y, spline_z, (start_ts, end_ts))
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(window_name="3D Trajectory Spline Interpolation")
+    
+    for spline_x, spline_y, spline_z, (start_ts, end_ts) in splines:
+        # Generate points along the spline
+        ts = np.linspace(start_ts, end_ts, num=100)
+        points = np.vstack((spline_x(ts), spline_y(ts), spline_z(ts))).T
+        
+        # Create a line set for visualization
+        lines = [[i, i + 1] for i in range(len(points) - 1)]
+        colors = [[1, 0, 0] for _ in range(len(lines))]  # Red color for the spline
+        
+        line_set = o3d.geometry.LineSet()
+        line_set.points = o3d.utility.Vector3dVector(points)
+        line_set.lines = o3d.utility.Vector2iVector(lines)
+        line_set.colors = o3d.utility.Vector3dVector(colors)
+        
+        vis.add_geometry(line_set)
+    
+    vis.run()
+    vis.destroy_window()
+
 with open('drone-tracking-datasets/dataset1/cameras.txt', 'r') as f:
     cameras = f.read().strip().split()    
 cameras = cameras[2::3]
@@ -340,63 +456,43 @@ for spline_x, spline_y, tss in splines[MAIN_CAMERA]:
     plt.plot(spline_x(tss), 1080-spline_y(tss))
 plt.xlim(0, 1920)
 plt.ylim(0, 1080)
-    
-correspondences = [] # List of (x1, y1), (x2, y2), (v2x, v2y), timestamps_2
+
+correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), timestamps_2
 det = df[df['cam_id'] == SECONDARY_CAMERA][['frame_id', 'detection_x', 'detection_y', 'velocity_x', 'velocity_y', 'global_ts']].values
+beta = 0
 
-plt.figure()
-
-for frame in det:
-    if frame[1] == 0.0 and frame[2] == 0.0:
-        continue
-    global_ts = compute_global_time(frame[0], camera_info[SECONDARY_CAMERA].fps)
+for iteration in range(5):  # Iterate to refine F and beta
+    correspondences = []
+    for frame in det:
+        # No point in secondary camera
+        if frame[1] == 0.0 and frame[2] == 0.0:
+            continue
+        global_ts = compute_global_time(frame[0], camera_info[SECONDARY_CAMERA].fps, beta)
+        
+        # find the spline of primary camera that contains the global_ts
+        found = False
+        for spline_x, spline_y, tss in splines[MAIN_CAMERA]:
+            if np.min(tss) <= global_ts <= np.max(tss):
+                found = True
+                correspondences.append(((float(spline_x(global_ts)), float(spline_y(global_ts))),
+                                        (frame[1] + beta * frame[3], frame[2] + beta * frame[4]),
+                                        (frame[3], frame[4]), global_ts))
+                break
     
-    # find the spline of cam0 that contains the global_ts
-    found = False
-    for spline_x, spline_y, tss in splines[MAIN_CAMERA]:
-        if np.min(tss) <= global_ts <= np.max(tss):
-            found = True
-            correspondences.append(((frame[1], frame[2]), (float(spline_x(global_ts)), float(spline_y(global_ts))), (frame[3],frame[4]), global_ts))
-            plt.scatter(float(spline_x(global_ts)), 1080-float(spline_y(global_ts)), s=1, c='black')
-            break
-    # if not found:
-    #     print("No spline found for frame", frame[0])
-    #     continue
+    if not correspondences:
+        print("No correspondences found.")
+        break
     
-plt.xlim(0, 1920)
-plt.ylim(0, 1080)
-    
-# Initial estimation of the fundamental matrix
-F, mask = cv.findFundamentalMat(np.array([x for x, _, _, _ in correspondences]), np.array([y for _, y, _, _ in correspondences]), cv.FM_RANSAC)
-
-# Iteratively refine F and beta
-for _ in range(1):  # Perform 5 iterations
-    # Keep only the inliers
+    F, mask = cv.findFundamentalMat(np.array([x for x, _, _, _ in correspondences]), np.array([y for _, y, _, _ in correspondences]), cv.FM_RANSAC)
     correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1 and correspondences[i][2][0] is not None]
-
+    
     # Estimate the time shift
     beta = estimate_time_shift(F, 
                             np.array([x for x, _, _, _ in correspondences]), 
                             np.array([y for _, y, _, _ in correspondences]), 
                             np.array([v for _, _, v, _ in correspondences]))
+    print(f"Iteration {iteration + 1}: Estimated time shift beta = {beta}")
 
-    print("Estimated time shift:", beta)
-
-    # Update the global timestamps for the secondary camera in the dataframe and in the correspondences
-    df.loc[df['cam_id'] == SECONDARY_CAMERA, 'global_ts'] = compute_global_time(
-        df.loc[df['cam_id'] == SECONDARY_CAMERA, 'frame_id'], 
-        camera_info[SECONDARY_CAMERA].fps, 
-        beta
-    )
-
-    # Recompute F using the updated timestamps and remove outliers
-    F, mask = cv.findFundamentalMat(np.array([x for x, _, _, _ in correspondences]), 
-                                    np.array([y for _, y, _, _ in correspondences]), 
-                                    cv.FM_RANSAC)
-
-    correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1]
-
-print("Final estimated time shift:", beta)
 
 # Update the global timestamps for the secondary camera in the dataframe and in the correspondences
 df.loc[df['cam_id'] == SECONDARY_CAMERA, 'global_ts'] = compute_global_time(
@@ -463,25 +559,48 @@ P2 = np.dot(camera_info[SECONDARY_CAMERA].K_matrix, np.hstack((R_correct, t_corr
 
 pts_3d = best_pts_3d
 
-# Convert 3D points to homogeneous coordinates (4 x N)
-pts_3d_hom = np.vstack((pts_3d.T, np.ones((1, pts_3d.shape[0]))))  # Shape: (4, N)
 
-# Project the 3D points into the secondary camera image plane using P2
-pts_2d_hom = P2 @ pts_3d_hom  # Matrix multiplication (3x4) @ (4xN) -> (3xN)
+# plot the 3D points
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(pts_3d[:, 0], pts_3d[:, 1], pts_3d[:, 2])
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_zlabel('Z')
 
-# Convert from homogeneous to pixel coordinates
-pts_2d = (pts_2d_hom[:2] / pts_2d_hom[2]).T  # Shape: (N, 2)
+correspondences = [correspondences[i] + (pts_3d[i],) for i in range(len(correspondences))] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), timestamps_2, 3D point
 
-# Plot the reprojected points
-plt.figure()
-plt.scatter(pts_2d[:, 0], 1080 - pts_2d[:, 1], s=1, c='black')  # Flip y-axis for visualization
-plt.xlim(0, 1920)
-plt.ylim(0, 1080)
-plt.title("Reprojected 3D Points in Image Coordinates")
-plt.show()
+# Split correspondences based on global timestamp
+
+slices = []
+this_slice = [correspondences[0]]
+
+for i in range(1, len(correspondences)):
+    if correspondences[i][3] - correspondences[i-1][3] > 0.5:
+        slices.append(this_slice)
+        this_slice = [correspondences[i]]
+    else:
+        this_slice.append(correspondences[i])
+slices.append(this_slice)
+
+# Interpolate the 3D splines for each slice
+splines_3d = [] # List of (spline_x, spline_y, spline_z, (start_ts, end_ts))
+
+for slice in slices:
+    if len(slice) < 3:
+        continue
+    pts_3d_slice = np.array([x[4] for x in slice])
+    tss = np.array([x[3] for x in slice])
+    spline_x = CubicSpline(tss, pts_3d_slice[:, 0])
+    spline_y = CubicSpline(tss, pts_3d_slice[:, 1])
+    spline_z = CubicSpline(tss, pts_3d_slice[:, 2])
+    
+    splines_3d.append((spline_x, spline_y, spline_z, (tss[0], tss[-1])))
 
 
-correspondences = [correspondences[i] + (pts_3d[i],) for i in range(len(correspondences))]
+show_splines(splines_3d) 
+    
+
 
 # Create point cloud for the 3D points
 point_cloud = o3d.geometry.PointCloud()
