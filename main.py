@@ -8,8 +8,8 @@ import open3d as o3d
 
 from camera_info import Camera_info
 
-MAIN_CAMERA = 3
-SECONDARY_CAMERA = 2
+MAIN_CAMERA = 0
+SECONDARY_CAMERA = 1
 
 def interpolate_trajectory(detections, time_stamps):
     """
@@ -105,6 +105,10 @@ def load_dataframe(cameras):
     for i, camera in enumerate(cameras):
         camera_info_i = get_camera_info(camera)
         detections_i = load_detections(i)
+        # detections_i = [(frame_id, 
+        #          x * camera_info_i.K_matrix[0, 0] + camera_info_i.K_matrix[0, 2] if x != 0.0 else 0.0, 
+        #          y * camera_info_i.K_matrix[1, 1] + camera_info_i.K_matrix[1, 2] if y != 0.0 else 0.0) 
+        #         for frame_id, x, y in detections_i]
         frame_indices_i = np.array([frame_id for frame_id, _, _ in detections_i])
         contiguous_i = find_contiguous_regions(detections_i)
         splines_i = []
@@ -313,7 +317,7 @@ def in_front_of_both_cameras(R, t, K1, K2, pts1, pts2):
     """
     Check if the triangulated points are in front of both cameras.
     
-    R: Rotation matrix from camera 1 to camera 2
+    R: Rotation matrix from camera 1 to camera 2 
     t: Translation vector from camera 1 to camera 2
     K1: Intrinsic matrix of camera 1
     K2: Intrinsic matrix of camera 2
@@ -452,8 +456,22 @@ cameras = cameras[2::3]
 df, splines, contiguous, camera_info = load_dataframe(cameras)
 
 plt.figure()
+
+# # Compute the image corners into camera space
+# topleft =       (camera_info[MAIN_CAMERA].K_matrix).T @ np.array([0, 0, 1])
+# topright =      (camera_info[MAIN_CAMERA].K_matrix).T @ np.array([camera_info[MAIN_CAMERA].resolution[0], 0, 1])
+# bottomleft =    (camera_info[MAIN_CAMERA].K_matrix).T @ np.array([0, camera_info[MAIN_CAMERA].resolution[1], 1])
+# bottomright =   (camera_info[MAIN_CAMERA].K_matrix).T @ np.array(camera_info[MAIN_CAMERA].resolution + [1])
+
+# img_height = topleft[1] - bottomleft[1]
+
+# # Plot the image corners
+# plt.scatter([topleft[0], topright[0], bottomright[0], bottomleft[0]],
+#             [-topleft[1], -topright[1], -bottomright[1], -bottomleft[1]], c='r')
+
 for spline_x, spline_y, tss in splines[MAIN_CAMERA]:
     plt.plot(spline_x(tss), 1080-spline_y(tss))
+    
 plt.xlim(0, 1920)
 plt.ylim(0, 1080)
 
@@ -461,7 +479,8 @@ correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), tim
 det = df[df['cam_id'] == SECONDARY_CAMERA][['frame_id', 'detection_x', 'detection_y', 'velocity_x', 'velocity_y', 'global_ts']].values
 beta = 0
 
-for iteration in range(5):  # Iterate to refine F and beta
+
+for iteration in range(3):  # Iterate to refine F and beta
     correspondences = []
     for frame in det:
         # No point in secondary camera
@@ -483,11 +502,13 @@ for iteration in range(5):  # Iterate to refine F and beta
         print("No correspondences found.")
         break
     
-    F, mask = cv.findFundamentalMat(np.array([x for x, _, _, _ in correspondences]), np.array([y for _, y, _, _ in correspondences]), cv.FM_RANSAC)
+    F, mask = cv.findFundamentalMat(np.array([x for x, _, _, _ in correspondences]), 
+                                  np.array([y for _, y, _, _ in correspondences]))
+                                  
     correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1 and correspondences[i][2][0] is not None]
     
     # Estimate the time shift
-    beta = estimate_time_shift(F, 
+    beta = estimate_time_shift(F,
                             np.array([x for x, _, _, _ in correspondences]), 
                             np.array([y for _, y, _, _ in correspondences]), 
                             np.array([v for _, _, v, _ in correspondences]))
@@ -506,67 +527,64 @@ df_filtered.to_csv('detections.csv', index=False)
 
 
 E = camera_info[SECONDARY_CAMERA].K_matrix.T @ F @ camera_info[MAIN_CAMERA].K_matrix
+pts1_camera_coord = np.array([(np.linalg.inv(camera_info[MAIN_CAMERA].K_matrix) @ np.array([x[0], x[1], 1]))[:2] for x, _, _, _ in correspondences], dtype=np.float32)
+pts2_camera_coord = np.array([(np.linalg.inv(camera_info[SECONDARY_CAMERA].K_matrix) @ np.array([y[0], y[1], 1]))[:2] for _, y, _, _ in correspondences], dtype=np.float32)
+retval, R, t, mask, pts_3d = cv.recoverPose(E, pts1_camera_coord, pts2_camera_coord, np.eye(3), distanceThresh=10.0)
 
-R1, R2, t = cv.decomposeEssentialMat(E)
+pts_3d = pts_3d.T
 
-# Convert the correspondences to the right format
-pts1 = np.array([np.array(x) for x, _, _, _ in correspondences])
-pts2 = np.array([np.array(y) for _, y, _, _ in correspondences])
+# Keep only the valid correspondences
+correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 255]
 
-# Check all four configurations to see which one places most points in front of both cameras
-configs = [
-    (R1, t, "R1, t"), 
-    (R1, -t, "R1, -t"), 
-    (R2, t, "R2, t"), 
-    (R2, -t, "R2, -t")
-]
+# # Convert the correspondences to the right format
+# pts1 = np.array([np.array(x) for x, _, _, _ in correspondences])
+# pts2 = np.array([np.array(y) for _, y, _, _ in correspondences])
 
-max_in_front = -1
-best_config = None
-best_pts_3d = None
+# # Check all four configurations to see which one places most points in front of both cameras
+# configs = [
+#     (R1, t, "R1, t"), 
+#     (R1, -t, "R1, -t"), 
+#     (R2, t, "R2, t"), 
+#     (R2, -t, "R2, -t")
+# ]
 
-# Visualize each configuration one by one
-for i, (R, t, name) in enumerate(configs):
-    print(f"\nEvaluating configuration {i+1}: {name}")
+# max_in_front = -1
+# best_config = None
+# best_pts_3d = None
+
+# # Visualize each configuration one by one
+# for i, (R, t, name) in enumerate(configs):
+#     print(f"\nEvaluating configuration {i+1}: {name}")
     
-    # Visualize this configuration and get the number of points in front
-    n_in_front, pts_3d_valid = visualize_configuration(
-        R, t, 
-        camera_info[MAIN_CAMERA].K_matrix, 
-        camera_info[SECONDARY_CAMERA].K_matrix, 
-        pts1, pts2,
-        name
-    )
+#     # Visualize this configuration and get the number of points in front
+#     n_in_front, pts_3d_valid = visualize_configuration(
+#         R, t, 
+#         camera_info[MAIN_CAMERA].K_matrix, 
+#         camera_info[SECONDARY_CAMERA].K_matrix, 
+#         pts1, pts2,
+#         name
+#     )
     
-    print(f"Configuration {name}: {n_in_front} points in front of both cameras")
+#     print(f"Configuration {name}: {n_in_front} points in front of both cameras")
     
-    if n_in_front > max_in_front:
-        max_in_front = n_in_front
-        best_config = (R, t)
-        best_pts_3d = pts_3d_valid
+#     if n_in_front > max_in_front:
+#         max_in_front = n_in_front
+#         best_config = (R, t)
+#         best_pts_3d = pts_3d_valid
 
-# Use the best configuration
-R_correct, t_correct = best_config
-print(f"\nSelected best configuration with {max_in_front} points in front of both cameras")
-print("Rotation matrix:")
-print(R_correct)
-print("Translation vector:")
-print(t_correct)
+# # Use the best configuration
+# R_correct, t_correct = best_config
+# print(f"\nSelected best configuration with {max_in_front} points in front of both cameras")
+# print("Rotation matrix:")
+# print(R_correct)
+# print("Translation vector:")
+# print(t_correct)
 
-# Triangulate the 3D points using the correct configuration
-P1 = np.dot(camera_info[MAIN_CAMERA].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
-P2 = np.dot(camera_info[SECONDARY_CAMERA].K_matrix, np.hstack((R_correct, t_correct.reshape(3, 1))))
+# # Triangulate the 3D points using the correct configuration
+# P1 = np.dot(camera_info[MAIN_CAMERA].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
+# P2 = np.dot(camera_info[SECONDARY_CAMERA].K_matrix, np.hstack((R_correct, t_correct.reshape(3, 1))))
 
-pts_3d = best_pts_3d
-
-
-# plot the 3D points
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-ax.scatter(pts_3d[:, 0], pts_3d[:, 1], pts_3d[:, 2])
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_zlabel('Z')
+# pts_3d = best_pts_3d
 
 correspondences = [correspondences[i] + (pts_3d[i],) for i in range(len(correspondences))] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), timestamps_2, 3D point
 
@@ -583,6 +601,27 @@ for i in range(1, len(correspondences)):
         this_slice.append(correspondences[i])
 slices.append(this_slice)
 
+# Plot slices of main camera
+plt.figure()
+for slice in slices:
+    if len(slice) < 3:
+        continue
+    pts_main_camera = np.array([x[0] for x in slice])
+    plt.plot(pts_main_camera[:, 0], 1080 - pts_main_camera[:, 1])
+plt.xlim(0, 1920)
+plt.ylim(0, 1080)
+plt.title("Slices of Main Camera")
+plt.xlabel("X")
+plt.ylabel("Y")
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+for slice in slices:
+    if len(slice) < 3:
+        continue
+    pts_3d_slice = np.array([x[4] for x in slice])
+    ax.scatter(pts_3d_slice[:, 0], pts_3d_slice[:, 1], pts_3d_slice[:, 2])
+
 # Interpolate the 3D splines for each slice
 splines_3d = [] # List of (spline_x, spline_y, spline_z, (start_ts, end_ts))
 
@@ -597,45 +636,49 @@ for slice in slices:
     
     splines_3d.append((spline_x, spline_y, spline_z, (tss[0], tss[-1])))
 
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+for spline_x, spline_y, spline_z, tss in splines_3d:
+    ts = np.linspace(tss[0], tss[1], num=100)
+    points = np.vstack((spline_x(ts), spline_y(ts), spline_z(ts))).T
+    ax.plot(points[:, 0], points[:, 1], points[:, 2])
 
 show_splines(splines_3d) 
     
+# # Create point cloud for the 3D points
+# point_cloud = o3d.geometry.PointCloud()
+# point_cloud.points = o3d.utility.Vector3dVector([pt[:3] for pt in pts_3d])
+# point_cloud.paint_uniform_color([0.0, 0.0, 1.0])  # Blue points
 
+# # Create visualizations for the cameras
+# # Camera 1 (Main) - at origin with identity rotation
+# cam1_frame = create_camera_visualization(np.eye(3), np.zeros(3), size=0.1, name="main")
 
-# Create point cloud for the 3D points
-point_cloud = o3d.geometry.PointCloud()
-point_cloud.points = o3d.utility.Vector3dVector(pts_3d)
-point_cloud.paint_uniform_color([0.0, 0.0, 1.0])  # Blue points
+# # Camera 2 (Secondary) - positioned according to R_correct and t_correct
+# # Camera 2 position is -R_correct.T @ t_correct
+# cam2_position = -R.T @ t
+# # The rotation for camera 2 in world coordinates
+# cam2_rotation = R.T
+# cam2_frame = create_camera_visualization(cam2_rotation, cam2_position, size=0.1, name="secondary")
 
-# Create visualizations for the cameras
-# Camera 1 (Main) - at origin with identity rotation
-cam1_frame = create_camera_visualization(np.eye(3), np.zeros(3), size=0.1, name="main")
+# # Create a visualizer for the final result
+# vis = o3d.visualization.Visualizer()
+# vis.create_window(window_name="Final 3D Reconstruction with Camera Poses")
 
-# Camera 2 (Secondary) - positioned according to R_correct and t_correct
-# Camera 2 position is -R_correct.T @ t_correct
-cam2_position = -R_correct.T @ t_correct
-# The rotation for camera 2 in world coordinates
-cam2_rotation = R_correct.T
-cam2_frame = create_camera_visualization(cam2_rotation, cam2_position, size=0.1, name="secondary")
+# # Add geometries to the visualizer
+# vis.add_geometry(point_cloud)
+# # vis.add_geometry(cam1_frame)
+# # vis.add_geometry(cam2_frame)
 
-# Create a visualizer for the final result
-vis = o3d.visualization.Visualizer()
-vis.create_window(window_name="Final 3D Reconstruction with Camera Poses")
+# # Set initial viewpoint
+# ctr = vis.get_view_control()
+# # ctr.set_lookat(np.mean(pts_3d, axis=0))
+# ctr.set_front([0, 0, -1])
+# ctr.set_up([0, -1, 0])
+# ctr.set_zoom(0.8)
 
-# Add geometries to the visualizer
-vis.add_geometry(point_cloud)
-# vis.add_geometry(cam1_frame)
-# vis.add_geometry(cam2_frame)
-
-# Set initial viewpoint
-ctr = vis.get_view_control()
-ctr.set_lookat(np.mean(pts_3d, axis=0))
-ctr.set_front([0, 0, -1])
-ctr.set_up([0, -1, 0])
-ctr.set_zoom(0.8)
-
-# Run the visualizer
-vis.run()
-vis.destroy_window()
+# # Run the visualizer
+# vis.run()
+# vis.destroy_window()
 
 plt.show()
