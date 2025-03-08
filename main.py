@@ -114,171 +114,6 @@ def estimate_time_shift(F, xi, xk, vk, max_iterations=1000, threshold=0.1, min_i
     
     return best_beta
 
-# def triangulate_points(P1, P2, pts1, pts2, K1, K2):
-#     """
-#     Triangulate points after normalizing them using camera intrinsics.
-    
-#     P1: Projection matrix for camera 1
-#     P2: Projection matrix for camera 2
-#     pts1: Points in image 1 (Nx2)
-#     pts2: Points in image 2 (Nx2)
-#     K1: Intrinsic matrix of camera 1
-#     K2: Intrinsic matrix of camera 2
-    
-#     Returns: Nx3 array of 3D points
-#     """
-#     # Convert points to homogeneous coordinates
-#     pts1_hom = np.hstack((pts1, np.ones((pts1.shape[0], 1)))).T  # Shape (3, N)
-#     pts2_hom = np.hstack((pts2, np.ones((pts2.shape[0], 1)))).T  # Shape (3, N)
-
-#     # Normalize image coordinates (convert to camera space)
-#     pts1_norm = np.linalg.inv(K1) @ pts1_hom  # (3, N)
-#     pts2_norm = np.linalg.inv(K2) @ pts2_hom  # (3, N)
-
-#     # Triangulate points
-#     pts_4d_hom = cv.triangulatePoints(P1, P2, pts1_norm[:2], pts2_norm[:2])  # OpenCV requires 2D (x,y)
-    
-#     # Convert from homogeneous coordinates
-#     pts_3d_hom = pts_4d_hom / pts_4d_hom[3]
-#     pts_3d = pts_3d_hom[:3].T  # Convert to (N, 3)
-
-#     return pts_3d
-
-# def in_front_of_both_cameras(R, t, K1, K2, pts1, pts2):
-#     """
-#     Check if the triangulated points are in front of both cameras.
-    
-#     R: Rotation matrix from camera 1 to camera 2 
-#     t: Translation vector from camera 1 to camera 2
-#     K1: Intrinsic matrix of camera 1
-#     K2: Intrinsic matrix of camera 2
-#     pts1: Points in camera 1
-#     pts2: Points in camera 2
-    
-#     Returns: Number of points in front of both cameras and the 3D points
-#     """
-#     P1 = np.dot(K1, np.hstack((np.eye(3), np.zeros((3, 1)))))
-#     P2 = np.dot(K2, np.hstack((R, t.reshape(3, 1))))
-    
-#     pts_3d = triangulate_points(P1, P2, pts1, pts2, K1, K2)
-    
-#     # Check if points are in front of camera 1
-#     pts_3d_in_cam1 = pts_3d.copy()
-#     in_front_cam1 = pts_3d_in_cam1[:, 2] > 0
-#     n_in_front_cam1 = np.sum(in_front_cam1)
-    
-#     # Check if points are in front of camera 2
-#     pts_3d_in_cam2 = np.dot(R, pts_3d.T).T + t.reshape(1, 3)
-#     in_front_cam2 = pts_3d_in_cam2[:, 2] > 0
-#     n_in_front_cam2 = np.sum(in_front_cam2)
-    
-#     # Points in front of both cameras
-#     in_front_both = np.logical_and(in_front_cam1, in_front_cam2)
-#     pts_3d_valid = pts_3d[in_front_both]
-    
-#     # Return the number of points in front of both cameras and the 3D points
-#     return min(n_in_front_cam1, n_in_front_cam2), pts_3d, pts_3d_valid
-
-# # Create Open3D visualization for camera
-# def create_camera_visualization(R, t, size=0.1, color=[0, 0, 0], name="Camera"):
-#     """Create a camera visualization with coordinate axes."""
-#     # Create a coordinate frame
-#     camera_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size)
-    
-#     # Apply the rotation and translation
-#     camera_frame.translate(t)
-#     camera_frame.rotate(R)
-#     return camera_frame
-
-# # Function to visualize a configuration
-# def visualize_configuration(R, t, K1, K2, pts1, pts2, config_name):
-#     """
-#     Visualize a specific R,t configuration with Open3D.
-    
-#     R: Rotation matrix from camera 1 to camera 2
-#     t: Translation vector from camera 1 to camera 2
-#     K1: Intrinsic matrix of camera 1
-#     K2: Intrinsic matrix of camera 2
-#     pts1: Points in camera 1
-#     pts2: Points in camera 2
-#     config_name: Name of this configuration (for window title)
-#     """
-#     # Get 3D points and count points in front of cameras
-#     n_in_front, pts_3d, pts_3d_valid = in_front_of_both_cameras(R, t, K1, K2, pts1, pts2)
-    
-#     # Create point cloud for all 3D points (blue)
-#     all_point_cloud = o3d.geometry.PointCloud()
-#     all_point_cloud.points = o3d.utility.Vector3dVector(pts_3d)
-#     all_point_cloud.paint_uniform_color([0.7, 0.7, 1.0])  # Light blue for all points
-    
-#     # Create point cloud for valid 3D points (green)
-#     valid_point_cloud = o3d.geometry.PointCloud()
-#     if len(pts_3d_valid) > 0:
-#         valid_point_cloud.points = o3d.utility.Vector3dVector(pts_3d_valid)
-#         valid_point_cloud.paint_uniform_color([0.0, 1.0, 0.0])  # Green for valid points
-    
-#     return n_in_front, pts_3d_valid
-    
-#     # Camera 1 (Main) - at origin with identity rotation
-#     cam1_frame = create_camera_visualization(np.eye(3), np.zeros(3), size=0.1, name="main")
-    
-#     # Camera 2 (Secondary) - positioned according to R and t
-#     # Camera 2 position is -R.T @ t
-#     cam2_position = -R.T @ t
-#     # The rotation for camera 2 in world coordinates
-#     cam2_rotation = R.T
-#     cam2_frame = create_camera_visualization(cam2_rotation, cam2_position, size=0.1, name="secondary")
-    
-#     # Create a visualizer
-#     vis = o3d.visualization.Visualizer()
-#     vis.create_window(window_name=f"Configuration: {config_name} - {n_in_front} points in front")
-    
-#     # Add geometries to the visualizer
-#     vis.add_geometry(all_point_cloud)
-#     vis.add_geometry(valid_point_cloud)
-#     # vis.add_geometry(cam1_frame)
-#     # vis.add_geometry(cam2_frame)
-    
-#     # Set initial viewpoint
-#     ctr = vis.get_view_control()
-#     if len(pts_3d_valid) > 0:
-#         ctr.set_lookat(np.mean(pts_3d_valid, axis=0))
-#     else:
-#         ctr.set_lookat(np.mean(pts_3d, axis=0))
-#     ctr.set_front([0, 0, -1])
-#     ctr.set_up([0, -1, 0])
-#     ctr.set_zoom(0.8)
-    
-#     # Run the visualizer
-#     vis.run()
-#     vis.destroy_window()
-    
-#     return n_in_front, pts_3d_valid
-
-# def show_splines(splines):
-#     """ Visualize the 3D splines using o3d """
-#     # Splines is a list of (spline_x, spline_y, spline_z, (start_ts, end_ts))
-#     vis = o3d.visualization.Visualizer()
-#     vis.create_window(window_name="3D Trajectory Spline Interpolation")
-    
-#     for spline_x, spline_y, spline_z, (start_ts, end_ts) in splines:
-#         # Generate points along the spline
-#         ts = np.linspace(start_ts, end_ts, num=100)
-#         points = np.vstack((spline_x(ts), spline_y(ts), spline_z(ts))).T
-        
-#         # Create a line set for visualization
-#         lines = [[i, i + 1] for i in range(len(points) - 1)]
-#         colors = [[1, 0, 0] for _ in range(len(lines))]  # Red color for the spline
-        
-#         line_set = o3d.geometry.LineSet()
-#         line_set.points = o3d.utility.Vector3dVector(points)
-#         line_set.lines = o3d.utility.Vector2iVector(lines)
-#         line_set.colors = o3d.utility.Vector3dVector(colors)
-        
-#         vis.add_geometry(line_set)
-    
-#     vis.run()
-#     vis.destroy_window()
 
 with open(f"drone-tracking-datasets/dataset{DATASET_NO}/cameras.txt", 'r') as f:
     cameras = f.read().strip().split()    
@@ -328,9 +163,10 @@ for iteration in range(5):  # Iterate to refine F and beta
         break
     
     F, mask = cv.findFundamentalMat(np.array([x for x, _, _, _ in correspondences]), 
-                                  np.array([y for _, y, _, _ in correspondences]))
+                                  np.array([y for _, y, v, t in correspondences]))
                                   
-    correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1 and correspondences[i][2][0] is not None]
+    correspondences = [correspondences[i] for i in range(len(correspondences)) if correspondences[i][2][0] is not None]
+    # correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1 and correspondences[i][2][0] is not None]
     
     # Estimate the time shift
     beta = estimate_time_shift(F,
@@ -420,8 +256,6 @@ for spline_x, spline_y, spline_z, tss in splines_3d:
     ts = np.linspace(tss[0], tss[1], num=100)
     points = np.vstack((spline_x(ts), spline_y(ts), spline_z(ts))).T
     ax.plot(points[:, 0], points[:, 1], points[:, 2])
-
-# show_splines(splines_3d) 
 
 # Re project the 3D points to the primary camera
 
