@@ -1,6 +1,6 @@
 import json
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, make_interp_spline
 from matplotlib import pyplot as plt
 import cv2 as cv
 import pandas as pd
@@ -19,8 +19,8 @@ def interpolate_trajectory(detections, time_stamps):
     Returns: Spline function for interpolation
     """
     detections = np.array(detections)
-    spline_x = CubicSpline(time_stamps, detections[:, 1])
-    spline_y = CubicSpline(time_stamps, detections[:, 2])
+    spline_x = make_interp_spline(time_stamps, detections[:, 1], k=3)
+    spline_y = make_interp_spline(time_stamps, detections[:, 2], k=3)
 
     
     return spline_x, spline_y

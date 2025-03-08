@@ -1,7 +1,9 @@
 import json
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, make_interp_spline
+from scipy.optimize import minimize
 from matplotlib import pyplot as plt
+import random
 import cv2 as cv
 import pandas as pd
 import open3d as o3d
@@ -9,6 +11,7 @@ import open3d as o3d
 from camera_info import Camera_info
 from data_loader import load_dataframe, find_max_overlapping
 from global_fn import compute_global_time
+from bundles_adj import minimize_reprojection_error
 
 DATASET_NO = 3
 
@@ -42,11 +45,7 @@ def estimate_time_shift(F, xi, xk, vk, max_iterations=1000, threshold=0.1, min_i
     list
         Indices of inliers
     """
-    import numpy as np
-    import random
-    import matplotlib.pyplot as plt
-    from tqdm import tqdm
-    
+
     # Make sure all inputs are numpy arrays
     xi = np.array(xi)
     xk = np.array(xk)
@@ -114,7 +113,6 @@ def estimate_time_shift(F, xi, xk, vk, max_iterations=1000, threshold=0.1, min_i
     
     return best_beta
 
-
 with open(f"drone-tracking-datasets/dataset{DATASET_NO}/cameras.txt", 'r') as f:
     cameras = f.read().strip().split()    
 cameras = cameras[2::3]
@@ -140,7 +138,7 @@ correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), tim
 det = df[df['cam_id'] == secondary_camera][['frame_id', 'detection_x', 'detection_y', 'velocity_x', 'velocity_y', 'global_ts']].values
 beta = 0
 
-for iteration in range(5):  # Iterate to refine F and beta
+for iteration in range(3):  # Iterate to refine F and beta
     correspondences = []
     for frame in det:
         # No point in secondary camera
@@ -165,8 +163,7 @@ for iteration in range(5):  # Iterate to refine F and beta
     F, mask = cv.findFundamentalMat(np.array([x for x, _, _, _ in correspondences]), 
                                   np.array([y for _, y, v, t in correspondences]))
                                   
-    correspondences = [correspondences[i] for i in range(len(correspondences)) if correspondences[i][2][0] is not None]
-    # correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1 and correspondences[i][2][0] is not None]
+    correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1 and correspondences[i][2][0] is not None]
     
     # Estimate the time shift
     beta = estimate_time_shift(F,
@@ -182,10 +179,6 @@ df.loc[df['cam_id'] == secondary_camera, 'global_ts'] = compute_global_time(
     camera_info[secondary_camera].fps, 
     beta
 )
-
-df_filtered = df[df['cam_id'].isin([main_camera, secondary_camera])]
-df_filtered.to_csv('detections.csv', index=False)
-
 
 E = camera_info[secondary_camera].K_matrix.T @ F @ camera_info[main_camera].K_matrix
 pts1_camera_coord = np.array([(np.linalg.inv(camera_info[main_camera].K_matrix) @ np.array([x[0], x[1], 1]))[:2] for x, _, _, _ in correspondences], dtype=np.float32)
@@ -243,9 +236,9 @@ for slice in slices:
         continue
     pts_3d_slice = np.array([x[4] for x in slice])
     tss = np.array([x[3] for x in slice])
-    spline_x = CubicSpline(tss, pts_3d_slice[:, 0])
-    spline_y = CubicSpline(tss, pts_3d_slice[:, 1])
-    spline_z = CubicSpline(tss, pts_3d_slice[:, 2])
+    spline_x = make_interp_spline(tss, pts_3d_slice[:, 0], k=3, bc_type='natural')
+    spline_y = make_interp_spline(tss, pts_3d_slice[:, 1], k=3, bc_type='natural')
+    spline_z = make_interp_spline(tss, pts_3d_slice[:, 2], k=3, bc_type='natural')
 
     
     splines_3d.append((spline_x, spline_y, spline_z, (tss[0], tss[-1])))
@@ -262,6 +255,8 @@ for spline_x, spline_y, spline_z, tss in splines_3d:
 pts_3d = np.array([x[4] for x in correspondences])
 pts_3d = pts_3d.T
 P1 = np.dot(camera_info[main_camera].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
+print(f"P1:\n{P1}")
+P2 = np.dot(camera_info[secondary_camera].K_matrix, np.hstack((R, t)))
 pts_2d = np.dot(P1, pts_3d)
 pts_2d = pts_2d / pts_2d[2]
 
@@ -273,8 +268,55 @@ plt.ylim(0, main_camera_height)
 plt.title("Reprojected 3D points to Main Camera")
 plt.xlabel("X")
 plt.ylabel("Y")
-
 plt.savefig('plots/reprojected_points.png')
 
+# Bundle Adjustment
+filtered_df = df[(df['cam_id'] == main_camera) | (df['cam_id'] == secondary_camera)]
+filtered_df.to_csv('detections.csv', index=False)
 
-# plt.show()
+alpha1 = camera_info[main_camera].fps
+alpha2 = camera_info[secondary_camera].fps
+res = minimize_reprojection_error(initial_Ps=(P1, P2), 
+                                    initial_splines=splines_3d, 
+                                    dataframe=df[(df['cam_id'] == main_camera) | (df['cam_id'] == secondary_camera)],
+                                    initial_alphas=(alpha1, alpha2), 
+                                    initial_betas=(0, beta))
+
+np.save('bundle_adjustment.npy', res)
+
+res = np.load('bundle_adjustment.npy', allow_pickle=True).item()
+
+new_3d_splines = res['splines']
+new_Ps = res['Ps']
+
+# Plot new 3D splines after bundle adjustment
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+for spline_x, spline_y, spline_z, tss in new_3d_splines:
+    ts = np.linspace(tss[0], tss[1], num=100)
+    points = np.vstack((spline_x(ts), spline_y(ts), spline_z(ts))).T
+    ax.plot(points[:, 0], points[:, 1], points[:, 2])
+
+plt.title("New 3D Splines after Bundle Adjustment")
+plt.xlabel("X")
+plt.ylabel("Y")
+ax.set_zlabel("Z")
+
+print("New P1:\n", new_Ps[0])
+
+plt.figure(figsize=figsize)
+for i, (spline_x, spline_y, spline_z, tss) in enumerate(new_3d_splines):
+    ts = np.linspace(tss[0], tss[1], num=100)
+    points = np.vstack((spline_x(ts), spline_y(ts), spline_z(ts), np.ones_like(ts)))
+    points = np.dot(new_Ps[0], points) # Project to main camera
+    points = points / points[2]
+    plt.plot(points[0], main_camera_height - points[1], label=f"Slice {i}")
+    
+# plt.xlim(0, main_camera_width)
+# plt.ylim(0, main_camera_height)
+plt.title("Reprojected 3D points to Main Camera after Bundle Adjustment")
+plt.xlabel("X")
+plt.ylabel("Y")
+plt.savefig('plots/reprojected_points_after_bundle_adjustment.png')
+
+plt.show()
