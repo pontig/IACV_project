@@ -37,6 +37,8 @@ def load_detections(camera_id, dataset_no):
     with open(f'drone-tracking-datasets/dataset{dataset_no}/detections/cam{camera_id}.txt', 'r') as f:
         for line in f:
             frame_id, x, y = map(float, line.strip().split())
+            # if frame_id > 946:
+            #     detections.append((frame_id - 946, x, y))
             detections.append((frame_id, x, y))
     return detections
 

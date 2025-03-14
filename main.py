@@ -113,309 +113,151 @@ def estimate_time_shift(F, xi, xk, vk, max_iterations=1000, threshold=0.1, min_i
     
     return best_beta
 
-def undistort(df, camera_info, camera_id):
-    dist_coeffs = camera_info[camera_id].distCoeff
-    K = camera_info[camera_id].K_matrix
-    points = df[df['cam_id'] == camera_id][['detection_x', 'detection_y']].values
-    undistorted_points = cv.undistortPoints(points.reshape(-1, 1, 2).astype(np.float32), K, dist_coeffs)
+def to_normalized_camera_coord(pts, K, distcoeff, R, t):
+    """
+    Convert points from image coordinates to normalized camera coordinates.
     
-    plt.figure(figsize=figsize)
-    plt.scatter(undistorted_points[:, 0, 0], undistorted_points[:, 0, 1], c='g', s=1)
-    plt.title(f"Undistorted points in Camera {camera_id}")
-    plt.xlabel("X")
-    plt.ylabel("Y")
-    plt.savefig(f'plots/undistorted_points_camera{camera_id}.png')
-
+    Parameters:
+    -----------
+    pts : ndarray
+        Points in image coordinates (N x 2)
+    K : ndarray
+        Camera matrix
+    distcoeff : ndarray
+        Distortion coefficients
     
+    Returns:
+    --------
+    ndarray
+        Points in normalized camera coordinates (N x 2)
+    """
+    P = np.dot(K, np.hstack((R, t)))
+    pts_normalized = cv.undistortPoints(pts, K, distcoeff, P=P)
     
+    # Convert from homogeneous coordinates to 2D
+    pts_normalized = pts_normalized.reshape(-1, 2)
+    
+    return pts_normalized
+   
     
 with open(f"drone-tracking-datasets/dataset{DATASET_NO}/cameras.txt", 'r') as f:
     cameras = f.read().strip().split()    
 cameras = cameras[2::3]
 
 df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
+# df = df[df['frame_id'] < 946]
 main_camera, secondary_camera, xx = find_max_overlapping(df, contiguous)
 print(f"MAX OVERLAP Main camera: {main_camera}, Secondary camera: {secondary_camera}, with {xx} frames")
 
 main_camera_width = camera_info[main_camera].resolution[0]
 main_camera_height = camera_info[main_camera].resolution[1]
-
-undistort(df, camera_info, main_camera)
-
-plt.figure(figsize=figsize)
-
-for spline_x, spline_y, tss in splines[main_camera]:
-    plt.plot(spline_x(tss), main_camera_height-spline_y(tss))
-    
-plt.xlim(0, main_camera_width)
-plt.ylim(0, main_camera_height)
-
-plt.savefig('plots/splines_whole.png')
+secondary_camera_width = camera_info[secondary_camera].resolution[0]
+secondary_camera_height = camera_info[secondary_camera].resolution[1]
 
 correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), timestamps_2
-det = df[df['cam_id'] == secondary_camera][['frame_id', 'detection_x', 'detection_y', 'velocity_x', 'velocity_y', 'global_ts']].values
+frames = df[df['cam_id'] == secondary_camera][['frame_id', 'detection_x', 'detection_y', 'velocity_x', 'velocity_y', 'global_ts']].values
+frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
 beta = 0
 
-plt.figure(figsize=figsize)
-valid_frames = [frame for frame in det if frame[1] != 0.0 or frame[2] != 0.0]
-print(f"Plotting initial correspondences between Main and Secondary Camera (length = {len(valid_frames)})")
-
-points_to_scatter = []
-
-for frame in valid_frames:
-    global_ts = compute_global_time(frame[0], camera_info[secondary_camera].fps, beta)
+for frame in frames:
+    global_ts = frame[5]
     for spline_x, spline_y, tss in splines[main_camera]:
         if np.min(tss) <= global_ts <= np.max(tss):
-            points_to_scatter.append((float(spline_x(global_ts)), main_camera_height - float(spline_y(global_ts))))
+            x1 = float(spline_x(global_ts))
+            y1 = float(spline_y(global_ts))
+            correspondences.append((
+                (x1, y1),
+                (frame[1], frame[2]),
+                (frame[3], frame[4]),
+                global_ts
+            ))
             break
-
-points_to_scatter = np.array(points_to_scatter)
-plt.scatter(points_to_scatter[:, 0], points_to_scatter[:, 1], c='k', s=1)
-
-plt.xlim(0, main_camera_width)
-plt.ylim(0, main_camera_height)
-plt.title("Correspondences between Main and Secondary Camera")
-plt.xlabel("X")
-plt.ylabel("Y")
-
-plt.savefig('plots/correspondences.png')
-
-
-for iteration in range(3):  # Iterate to refine F and beta
-    correspondences = []
-    for frame in det:
-        # No point in secondary camera
-        if frame[1] == 0.0 and frame[2] == 0.0:
-            continue
-        global_ts = compute_global_time(frame[0], camera_info[secondary_camera].fps, beta)
         
-        # find the spline of primary camera that contains the global_ts
-        found = False
-        for spline_x, spline_y, tss in splines[main_camera]:
-            if np.min(tss) <= global_ts <= np.max(tss):
-                found = True
-                correspondences.append(((float(spline_x(global_ts)), float(spline_y(global_ts))),
-                                        (frame[1] + beta * frame[3], frame[2] + beta * frame[4]),
-                                        (frame[3], frame[4]), global_ts))
-                break
-            
-    if not correspondences:
-        print("No correspondences found.")
-        break
-    
-    F, mask = cv.findFundamentalMat(np.array([x for x, _, _, _ in correspondences]), 
-                                  np.array([y for _, y, v, t in correspondences]),
-                                    cv.FM_RANSAC, 0.1, 0.99)
-                                  
-    
-    # Estimate the time shift
-    beta = estimate_time_shift(F,
-                            np.array([x for x, _, _, _ in correspondences]), 
-                            np.array([y for _, y, _, _ in correspondences]), 
-                            np.array([v for _, _, v, _ in correspondences]))
-    print(f"Iteration {iteration + 1}: Estimated time shift beta = {beta}")
-
-correspondences = [correspondences[i] for i in range(len(correspondences)) if  correspondences[i][2][0] is not None] # if mask[i] == 1
-
-# Update the global timestamps for the secondary camera in the dataframe and in the correspondences
-df.loc[df['cam_id'] == secondary_camera, 'global_ts'] = compute_global_time(
-    df.loc[df['cam_id'] == secondary_camera, 'frame_id'], 
-    camera_info[secondary_camera].fps, 
-    beta
+if not correspondences:
+    raise ValueError("No overlapping frames found between the two cameras")
+# Estimate the fundamental matrix
+F, mask = cv.findFundamentalMat(
+    np.array([x for x, _, _, _ in correspondences]),
+    np.array([y for _, y, _, _ in correspondences]),
+    cv.RANSAC, 0.1, 0.99
 )
 
-print(f"left correspondences: {len(correspondences)}")
+print(np.sum(mask))
+print(correspondences.__len__())
+print(f"Estimated fundamental matrix: {F}")
+# correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1]
 
-E = camera_info[secondary_camera].K_matrix.T @ F @ camera_info[main_camera].K_matrix
-pts1_camera_coord = np.array([(np.linalg.inv(camera_info[main_camera].K_matrix) @ np.array([x[0], x[1], 1]))[:2] for x, _, _, _ in correspondences], dtype=np.float32)
-pts2_camera_coord = np.array([(np.linalg.inv(camera_info[secondary_camera].K_matrix) @ np.array([y[0], y[1], 1]))[:2] for _, y, _, _ in correspondences], dtype=np.float32)
-# Recover pose
-# Normalize the points by dividing by the focal length and subtracting the principal point
-pts1_camera_coord = np.array([[(x[0] - camera_info[main_camera].K_matrix[0, 2]) / camera_info[main_camera].K_matrix[0, 0],
-                              (x[1] - camera_info[main_camera].K_matrix[1, 2]) / camera_info[main_camera].K_matrix[1, 1]] 
-                             for x, _, _, _ in correspondences], dtype=np.float32)
+# Essential matrix
+E = camera_info[main_camera].K_matrix.T @ F @ camera_info[secondary_camera].K_matrix
+print(f"Estimated essential matrix:\n {E}")
 
-pts2_camera_coord = np.array([[(y[0] - camera_info[secondary_camera].K_matrix[0, 2]) / camera_info[secondary_camera].K_matrix[0, 0],
-                              (y[1] - camera_info[secondary_camera].K_matrix[1, 2]) / camera_info[secondary_camera].K_matrix[1, 1]] 
-                             for _, y, _, _ in correspondences], dtype=np.float32)
-retval, R, t, mask = cv.recoverPose(E, pts1_camera_coord, pts2_camera_coord)
 
-plt.figure(figsize=figsize)
-plt.scatter(pts1_camera_coord[:, 0], pts1_camera_coord[:, 1], c='b', s=1)
-plt.title("Correspondences in Camera 1 in normalized coordinates")
-plt.xlabel("X")
-plt.ylabel("Y")
-plt.savefig('plots/norm_coords_camera1.png')
+_, E, R, t, mask = cv.recoverPose(
+    np.array([x for x, _, _, _ in correspondences]),
+    np.array([y for _, y, _, _ in correspondences]),
+    camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff,
+    camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff,
+    method=cv.RANSAC
+)
+print(R)
+P1 = np.dot(camera_info[main_camera].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
+P2 = np.dot(camera_info[secondary_camera].K_matrix, np.hstack((R, t)))
+pts_camera_coord_1 = to_normalized_camera_coord(np.array([x for x, _, _, _ in correspondences]), camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff, np.eye(3), np.zeros((3,1)))
+pts_camera_coord_2 = to_normalized_camera_coord(np.array([y for _, y, _, _ in correspondences]), camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff, R, t)
+
+fig, ax = plt.subplots(2, 2, figsize=(15, 7))
+
+# Plot points in camera coordinates for main camera
+ax[0, 0].scatter(pts_camera_coord_1[:, 0], -pts_camera_coord_1[:, 1], c='r', marker='o', s=1)
+ax[0, 0].set_title('Main Camera Coordinates')
+ax[0, 0].set_xlabel('X')
+ax[0, 0].set_ylabel('Y')
+ax[0, 0].axis('equal')
+
+# Plot points in camera coordinates for secondary camera
+ax[0, 1].scatter(pts_camera_coord_2[:, 0], -pts_camera_coord_2[:, 1], c='b', marker='o', s=1)
+ax[0, 1].set_title('Secondary Camera Coordinates')
+ax[0, 1].set_xlabel('X')
+ax[0, 1].set_ylabel('Y')
+ax[0, 1].axis('equal')
 
 # Triangulate points
-P1 = np.dot(camera_info[main_camera].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
-P2 = np.dot(camera_info[secondary_camera].K_matrix, np.hstack((R, t)))
-pts_4d_hom = cv.triangulatePoints(P1, P2, pts1_camera_coord.T, pts2_camera_coord.T)
+pts_3d = cv.triangulatePoints(P1, P2, pts_camera_coord_1.T, pts_camera_coord_2.T)
+pts_3d /= pts_3d[3]
 
-# Convert homogeneous coordinates to 3D
-pts_3d = pts_4d_hom[:3] / pts_4d_hom[3]
-pts_3d = pts_3d.T
+# Re-project points onto the image planes
+# Convert rotation matrices to rotation vectors using Rodrigues
+rvec_main, _ = cv.Rodrigues(np.eye(3))
+rvec_secondary, _ = cv.Rodrigues(R)
 
-# Keep only the valid correspondences
-# correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 255]
-correspondences = [correspondences[i] + (pts_3d[i],) for i in range(len(correspondences)) if not np.isnan(pts_3d[i]).any()] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), timestamps_2, 3D point
+# Project 3D points to 2D image plane
+pts_2d_main = cv.projectPoints(pts_3d.T[:, :3], rvec_main, np.zeros(3), camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff)[0]
+pts_2d_secondary = cv.projectPoints(pts_3d.T[:, :3], rvec_secondary, t, camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff)[0]
+pts_2d_main = pts_2d_main.reshape(-1, 2)
+pts_2d_secondary = pts_2d_secondary.reshape(-1, 2)
 
+# Plot re-projected points for main camera
+ax[1, 0].scatter(pts_2d_main[:,0], -pts_2d_main[:,1], c='r', marker='o', s=1)
+ax[1, 0].set_title('Main Camera Reprojections')
+ax[1, 0].set_xlabel('X')
+ax[1, 0].set_ylabel('Y')
+ax[1, 0].axis('equal')
 
-# Split correspondences based on global timestamp
-slices = []
-this_slice = [correspondences[0]]
+# Plot re-projected points for secondary camera
+ax[1, 1].scatter(pts_2d_secondary[:,0], -pts_2d_secondary[:,1], c='b', marker='o', s=1)
+ax[1, 1].set_title('Secondary Camera Reprojections')
+ax[1, 1].set_xlabel('X')
+ax[1, 1].set_ylabel('Y')
+ax[1, 1].axis('equal')
 
-for i in range(1, len(correspondences)):
-    if correspondences[i][3] - correspondences[i-1][3] > 0.5:
-        slices.append(this_slice)
-        this_slice = [correspondences[i]]
-    else:
-        this_slice.append(correspondences[i])
-slices.append(this_slice)
-
-# Plot slices of main camera
-plt.figure(figsize=figsize)
-for slice in slices:
-    if len(slice) < 3:
-        continue
-    pts_main_camera = np.array([x[0] for x in slice])
-    plt.plot(pts_main_camera[:, 0], main_camera_height - pts_main_camera[:, 1])
-plt.xlim(0, main_camera_width)
-plt.ylim(0, main_camera_height)
-plt.title("Slices of Main Camera")
-plt.xlabel("X")
-plt.ylabel("Y")
-
-plt.savefig('plots/slices_main_camera.png')
-
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-for slice in slices:
-    if len(slice) < 3:
-        continue
-    pts_3d_slice = np.array([x[4] for x in slice])
-    ax.scatter(pts_3d_slice[:, 0], pts_3d_slice[:, 1], pts_3d_slice[:, 2])
-    
-# Interpolate the 3D splines for each slice
-splines_3d = [] # List of (spline_x, spline_y, spline_z, (start_ts, end_ts))
-
-for slice in slices:
-    if len(slice) < 3:
-        continue
-    pts_3d_slice = np.array([x[4] for x in slice])
-    tss = np.array([x[3] for x in slice])
-    spline_x = make_interp_spline(tss, pts_3d_slice[:, 0], k=3, bc_type='natural')
-    spline_y = make_interp_spline(tss, pts_3d_slice[:, 1], k=3, bc_type='natural')
-    spline_z = make_interp_spline(tss, pts_3d_slice[:, 2], k=3, bc_type='natural')
-
-    
-    splines_3d.append((spline_x, spline_y, spline_z, (tss[0], tss[-1])))
-
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-for spline_x, spline_y, spline_z, tss in splines_3d:
-    ts = np.linspace(tss[0], tss[1], num=100)
-    points = np.vstack((spline_x(ts), spline_y(ts), spline_z(ts))).T
-    ax.plot(points[:, 0], points[:, 1], points[:, 2])
-
-# Re project the 3D points to the primary camera
-
-pts_3d = np.array([np.append(x[4], 1) for x in correspondences])
-pts_3d = pts_3d.T
-P1 = np.dot(camera_info[main_camera].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
-print(f"P1:\n{P1}")
-P2 = np.dot(camera_info[secondary_camera].K_matrix, np.hstack((R, t)))
-pts_2d = np.dot(P1, pts_3d)
-pts_2d = pts_2d / pts_2d[2]
-
-# Plot the reprojected points
-plt.figure(figsize=figsize)
-plt.scatter(pts_2d[0], main_camera_height - pts_2d[1], c='r', s=1)
-# plt.xlim(0, main_camera_width)
-# plt.ylim(0, main_camera_height)
-plt.title("Reprojected 3D points to Main Camera")
-plt.xlabel("X")
-plt.ylabel("Y")
-plt.savefig('plots/reprojected_points.png')
-
-# plt.show()
-exit(0)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Bundle Adjustment
-filtered_df = df[(df['cam_id'] == main_camera) | (df['cam_id'] == secondary_camera)]
-filtered_df.to_csv('detections.csv', index=False)
-
-alpha1 = camera_info[main_camera].fps
-alpha2 = camera_info[secondary_camera].fps
-res = minimize_reprojection_error(initial_poses=((np.eye(3), np.zeros(3)), (R, t)),
-                                  calibration_matrices=(camera_info[main_camera].K_matrix, camera_info[secondary_camera].K_matrix),
-                                    initial_splines=splines_3d, 
-                                    dataframe=df[(df['cam_id'] == main_camera) | (df['cam_id'] == secondary_camera)],
-                                    initial_alphas=(alpha1, alpha2), 
-                                    initial_betas=(0, beta))
-
-np.save('bundle_adjustment.npy', res)
-
-res = np.load('bundle_adjustment.npy', allow_pickle=True).item()
-
-new_3d_splines = res['splines']
-new_Ps = res['Ps']
-
-# Plot new 3D splines after bundle adjustment
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-for spline_x, spline_y, spline_z, tss in new_3d_splines:
-    ts = np.linspace(tss[0], tss[1], num=100)
-    points = np.vstack((spline_x(ts), spline_y(ts), spline_z(ts))).T
-    ax.plot(points[:, 0], points[:, 1], points[:, 2])
-
-plt.title("New 3D Splines after Bundle Adjustment")
-plt.xlabel("X")
-plt.ylabel("Y")
-ax.set_zlabel("Z")
-
-print("New P1:\n", new_Ps[0])
-
-plt.figure(figsize=figsize)
-for i, (spline_x, spline_y, spline_z, tss) in enumerate(new_3d_splines):
-    ts = np.linspace(tss[0], tss[1], num=100)
-    points = np.vstack((spline_x(ts), spline_y(ts), spline_z(ts), np.ones_like(ts)))
-    points = np.dot(new_Ps[0], points) # Project to main camera
-    points = points / points[2]
-    plt.plot(points[0], main_camera_height - points[1], label=f"Slice {i}")
-    
-# plt.xlim(0, main_camera_width)
-# plt.ylim(0, main_camera_height)
-plt.title("Reprojected 3D points to Main Camera after Bundle Adjustment")
-plt.xlabel("X")
-plt.ylabel("Y")
-plt.savefig('plots/reprojected_points_after_bundle_adjustment.png')
+# Plot 3D points
+fig_3d = plt.figure(figsize=(10, 10))
+ax_3d = fig_3d.add_subplot(111, projection='3d')
+ax_3d.scatter(pts_3d[0], pts_3d[1], pts_3d[2], c='g', marker='o', s=1)
+ax_3d.set_title('3D Points')
+ax_3d.set_xlabel('X')
+ax_3d.set_ylabel('Y')
+ax_3d.set_zlabel('Z')
+plt.show()
 
 plt.show()
