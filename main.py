@@ -132,7 +132,7 @@ def to_normalized_camera_coord(pts, K, distcoeff, R, t):
         Points in normalized camera coordinates (N x 2)
     """
     P = np.dot(K, np.hstack((R, t)))
-    pts_normalized = cv.undistortPoints(pts, K, distcoeff, P=P)
+    pts_normalized = cv.undistortPoints(pts, K, distcoeff)
     
     # Convert from homogeneous coordinates to 2D
     pts_normalized = pts_normalized.reshape(-1, 2)
@@ -179,8 +179,9 @@ if not correspondences:
 F, mask = cv.findFundamentalMat(
     np.array([x for x, _, _, _ in correspondences]),
     np.array([y for _, y, _, _ in correspondences]),
-    cv.RANSAC, 0.1, 0.99
+    cv.RANSAC, 3, 0.9
 )
+
 
 print(np.sum(mask))
 print(correspondences.__len__())
@@ -188,7 +189,7 @@ print(f"Estimated fundamental matrix: {F}")
 # correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1]
 
 # Essential matrix
-E = camera_info[main_camera].K_matrix.T @ F @ camera_info[secondary_camera].K_matrix
+E = camera_info[secondary_camera].K_matrix.T @ F @ camera_info[main_camera].K_matrix
 print(f"Estimated essential matrix:\n {E}")
 
 
@@ -197,9 +198,9 @@ _, E, R, t, mask = cv.recoverPose(
     np.array([y for _, y, _, _ in correspondences]),
     camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff,
     camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff,
-    method=cv.RANSAC
+    cv.RANSAC, 0.1, 0.999
 )
-print(R)
+print(E)
 P1 = np.dot(camera_info[main_camera].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
 P2 = np.dot(camera_info[secondary_camera].K_matrix, np.hstack((R, t)))
 pts_camera_coord_1 = to_normalized_camera_coord(np.array([x for x, _, _, _ in correspondences]), camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff, np.eye(3), np.zeros((3,1)))
