@@ -93,6 +93,26 @@ def load_dataframe(cameras, dataset_no):
     for i, camera in enumerate(cameras):
         camera_info_i = get_camera_info(camera)
         detections_i = load_detections(i, dataset_no)
+        
+        new_camera_matrix, roi = cv.getOptimalNewCameraMatrix(camera_info_i.K_matrix, camera_info_i.distCoeff, camera_info_i.resolution, 1, camera_info_i.resolution)
+        zero_indexes = [j for j, (_, x, y) in enumerate(detections_i) if x == 0.0 or y == 0.0]
+        dst = cv.undistortPoints(np.array([[x, y] for _, x, y in detections_i if x != 0.0 and y != 0.0]).reshape(-1, 1, 2), camera_info_i.K_matrix, camera_info_i.distCoeff, P=new_camera_matrix)
+        detections_i = [(frame_id, x[0][0], x[0][1]) for (frame_id, _ , _), x in zip(detections_i, dst)]
+        detections_i = [(frame_id, 0.0, 0.0) if j in zero_indexes else (frame_id, x, y) for j, (frame_id, x, y) in enumerate(detections_i)]
+        camera_info_i.K_matrix = new_camera_matrix
+        camera_info_i.distCoeff = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+        
+        # Scatter plot of detections_i
+        plt.scatter([x for _, x, _ in detections_i], [-y for _, _, y in detections_i], label=f'Camera {i}', s=1)
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.title(f'Detections for Camera {i}')
+        plt.xlim(0, camera_info_i.resolution[0])
+        plt.ylim(-camera_info_i.resolution[1], 0)
+        plt.legend()
+        plt.savefig(f'plots/detections_camera_{i}.png')
+        plt.clf()
+        
         # detections_i = [(frame_id, 
         #          x * camera_info_i.K_matrix[0, 0] + camera_info_i.K_matrix[0, 2] if x != 0.0 else 0.0, 
         #          y * camera_info_i.K_matrix[1, 1] + camera_info_i.K_matrix[1, 2] if y != 0.0 else 0.0) 
@@ -107,7 +127,22 @@ def load_dataframe(cameras, dataset_no):
                 splines_i.append((spline_x, spline_y, timestamps_j))
         splines.append(splines_i)
         camera_info.append(camera_info_i)
-        contiguous.append(contiguous_i)            
+        contiguous.append(contiguous_i)
+        
+        # Plot splines_i
+        for spline_x, spline_y, timestamps_j in splines_i:
+            ts_dense = timestamps_j
+            x_dense = spline_x(ts_dense)
+            y_dense = spline_y(ts_dense)
+            plt.plot(x_dense, -y_dense, label=f'Spline {i}')
+        
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.title(f'Splines for Camera {i}')
+        plt.xlim(0, camera_info_i.resolution[0])
+        plt.ylim(-camera_info_i.resolution[1], 0)
+        plt.savefig(f'plots/splines_camera_{i}.png')
+        plt.clf()
         
         for frame_id, x, y in detections_i:
             global_ts = compute_global_time(np.array([frame_id]), camera_info_i.fps)[0]

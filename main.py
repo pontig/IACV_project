@@ -145,7 +145,6 @@ with open(f"drone-tracking-datasets/dataset{DATASET_NO}/cameras.txt", 'r') as f:
 cameras = cameras[2::3]
 
 df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
-# df = df[df['frame_id'] < 946]
 main_camera, secondary_camera, xx = find_max_overlapping(df, contiguous)
 print(f"MAX OVERLAP Main camera: {main_camera}, Secondary camera: {secondary_camera}, with {xx} frames")
 
@@ -179,7 +178,7 @@ if not correspondences:
 F, mask = cv.findFundamentalMat(
     np.array([x for x, _, _, _ in correspondences]),
     np.array([y for _, y, _, _ in correspondences]),
-    cv.RANSAC, 3, 0.9
+    cv.RANSAC, 3, 0.999
 )
 
 
@@ -190,7 +189,7 @@ print(f"Estimated fundamental matrix: {F}")
 
 # Essential matrix
 E = camera_info[secondary_camera].K_matrix.T @ F @ camera_info[main_camera].K_matrix
-print(f"Estimated essential matrix:\n {E}")
+print(f"Estimated essential matrix:\n {E/E[2, 2]}")
 
 
 _, E, R, t, mask = cv.recoverPose(
@@ -198,13 +197,15 @@ _, E, R, t, mask = cv.recoverPose(
     np.array([y for _, y, _, _ in correspondences]),
     camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff,
     camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff,
-    cv.RANSAC, 0.1, 0.999
+    cv.RANSAC, 0.999, 3
 )
-print(E)
+print(E/E[2, 2])
 P1 = np.dot(camera_info[main_camera].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
 P2 = np.dot(camera_info[secondary_camera].K_matrix, np.hstack((R, t)))
-pts_camera_coord_1 = to_normalized_camera_coord(np.array([x for x, _, _, _ in correspondences]), camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff, np.eye(3), np.zeros((3,1)))
-pts_camera_coord_2 = to_normalized_camera_coord(np.array([y for _, y, _, _ in correspondences]), camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff, R, t)
+# pts_camera_coord_1 = to_normalized_camera_coord(np.array([x for x, _, _, _ in correspondences]), camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff, np.eye(3), np.zeros((3,1)))
+# pts_camera_coord_2 = to_normalized_camera_coord(np.array([y for _, y, _, _ in correspondences]), camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff, R, t)
+pts_camera_coord_1 = np.array([x for x, _, _, _ in correspondences])
+pts_camera_coord_2 = np.array([y for _, y, _, _ in correspondences])
 
 fig, ax = plt.subplots(2, 2, figsize=(15, 7))
 
@@ -259,6 +260,5 @@ ax_3d.set_title('3D Points')
 ax_3d.set_xlabel('X')
 ax_3d.set_ylabel('Y')
 ax_3d.set_zlabel('Z')
-plt.show()
 
 plt.show()
