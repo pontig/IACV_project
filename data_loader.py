@@ -40,6 +40,8 @@ def load_detections(camera_id, dataset_no):
             # if frame_id > 946:
             #     detections.append((frame_id - 946, x, y))
             detections.append((frame_id, x, y))
+            
+            
     return detections
 
 def get_camera_info(camera_name):
@@ -90,17 +92,31 @@ def load_dataframe(cameras, dataset_no):
         'velocity_x': [],
         'velocity_y': []
     }
+    plt.figure(figsize=(19, 10))
     for i, camera in enumerate(cameras):
         camera_info_i = get_camera_info(camera)
         detections_i = load_detections(i, dataset_no)
         
-        new_camera_matrix, roi = cv.getOptimalNewCameraMatrix(camera_info_i.K_matrix, camera_info_i.distCoeff, camera_info_i.resolution, 1, camera_info_i.resolution)
-        zero_indexes = [j for j, (_, x, y) in enumerate(detections_i) if x == 0.0 or y == 0.0]
+        new_camera_matrix, roi = cv.getOptimalNewCameraMatrix(camera_info_i.K_matrix, camera_info_i.distCoeff, camera_info_i.resolution, 0, camera_info_i.resolution)
         dst = cv.undistortPoints(np.array([[x, y] for _, x, y in detections_i if x != 0.0 and y != 0.0]).reshape(-1, 1, 2), camera_info_i.K_matrix, camera_info_i.distCoeff, P=new_camera_matrix)
-        detections_i = [(frame_id, x[0][0], x[0][1]) for (frame_id, _ , _), x in zip(detections_i, dst)]
-        detections_i = [(frame_id, 0.0, 0.0) if j in zero_indexes else (frame_id, x, y) for j, (frame_id, x, y) in enumerate(detections_i)]
+        cnt = 0
+        for j in range(len(detections_i)):
+            if detections_i[j][1] != 0.0 and detections_i[j][2] != 0.0:
+                detections_i[j] = (detections_i[j][0], dst[cnt][0][0], dst[cnt][0][1])
+                cnt += 1
         camera_info_i.K_matrix = new_camera_matrix
         camera_info_i.distCoeff = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+        
+        image = cv.imread(f'drone-tracking-datasets/dataset{dataset_no}/cam{i}.jpg')
+        image = cv.undistort(image, camera_info_i.K_matrix, camera_info_i.distCoeff, None, new_camera_matrix)
+        xx, yy, ww, hh = roi
+        image = image[yy:yy+hh, xx:xx+ww]
+        # Scatter plot of detections on the image
+        for frame_id, x, y in detections_i:
+            if x != 0.0 and y != 0.0:
+                cv.circle(image, (int(x), int(y)), 2, (0, 255, 0), -1)
+        
+        cv.imwrite(f'plots/detections_on_image_camera_{i}.png', image)
         
         # Scatter plot of detections_i
         plt.scatter([x for _, x, _ in detections_i], [-y for _, _, y in detections_i], label=f'Camera {i}', s=1)
@@ -134,13 +150,14 @@ def load_dataframe(cameras, dataset_no):
             ts_dense = timestamps_j
             x_dense = spline_x(ts_dense)
             y_dense = spline_y(ts_dense)
-            plt.plot(x_dense, -y_dense, label=f'Spline {i}')
+            plt.plot(x_dense, -y_dense, label=f'Times: {timestamps_j[0]:.2f} - {timestamps_j[-1]:.2f}')
         
         plt.xlabel('X')
         plt.ylabel('Y')
         plt.title(f'Splines for Camera {i}')
         plt.xlim(0, camera_info_i.resolution[0])
         plt.ylim(-camera_info_i.resolution[1], 0)
+        plt.legend()
         plt.savefig(f'plots/splines_camera_{i}.png')
         plt.clf()
         

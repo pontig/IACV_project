@@ -252,6 +252,8 @@ ax[1, 1].set_xlabel('X')
 ax[1, 1].set_ylabel('Y')
 ax[1, 1].axis('equal')
 
+fig.savefig('plots/reprojection.png')
+
 # Plot 3D points
 fig_3d = plt.figure(figsize=(10, 10))
 ax_3d = fig_3d.add_subplot(111, projection='3d')
@@ -261,4 +263,4 @@ ax_3d.set_xlabel('X')
 ax_3d.set_ylabel('Y')
 ax_3d.set_zlabel('Z')
 
-plt.show()
+# plt.show()
