@@ -7,7 +7,7 @@ import pandas as pd
 import open3d as o3d
 
 from camera_info import Camera_info
-from global_fn import compute_global_time
+from global_fn import *
 
 def interpolate_trajectory(detections, time_stamps):
     """
@@ -104,11 +104,12 @@ def load_dataframe(cameras, dataset_no):
             if detections_i[j][1] != 0.0 and detections_i[j][2] != 0.0:
                 detections_i[j] = (detections_i[j][0], dst[cnt][0][0], dst[cnt][0][1])
                 cnt += 1
+        image = cv.imread(f'drone-tracking-datasets/dataset{dataset_no}/cam{i}.jpg')
+        image = cv.undistort(image, camera_info_i.K_matrix, camera_info_i.distCoeff, None, new_camera_matrix)
+        
         camera_info_i.K_matrix = new_camera_matrix
         camera_info_i.distCoeff = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
         
-        image = cv.imread(f'drone-tracking-datasets/dataset{dataset_no}/cam{i}.jpg')
-        image = cv.undistort(image, camera_info_i.K_matrix, camera_info_i.distCoeff, None, new_camera_matrix)
         xx, yy, ww, hh = roi
         image = image[yy:yy+hh, xx:xx+ww]
         # Scatter plot of detections on the image
@@ -125,7 +126,7 @@ def load_dataframe(cameras, dataset_no):
         plt.title(f'Detections for Camera {i}')
         plt.xlim(0, camera_info_i.resolution[0])
         plt.ylim(-camera_info_i.resolution[1], 0)
-        plt.legend()
+
         plt.savefig(f'plots/detections_camera_{i}.png')
         plt.clf()
         
@@ -137,7 +138,7 @@ def load_dataframe(cameras, dataset_no):
         contiguous_i = find_contiguous_regions(detections_i)
         splines_i = []
         for start_frame, end_frame in contiguous_i:
-            timestamps_j = compute_global_time(frame_indices_i[int(start_frame-1):int(end_frame-1)], camera_info_i.fps)
+            timestamps_j = compute_global_time(frame_indices_i[int(start_frame-1):int(end_frame-1)], alphas[i], betas[i])
             if len(timestamps_j) > 3:
                 spline_x, spline_y = interpolate_trajectory(detections_i[int(start_frame-1):int(end_frame-1)], timestamps_j)
                 splines_i.append((spline_x, spline_y, timestamps_j))
@@ -157,12 +158,11 @@ def load_dataframe(cameras, dataset_no):
         plt.title(f'Splines for Camera {i}')
         plt.xlim(0, camera_info_i.resolution[0])
         plt.ylim(-camera_info_i.resolution[1], 0)
-        plt.legend()
         plt.savefig(f'plots/splines_camera_{i}.png')
         plt.clf()
         
         for frame_id, x, y in detections_i:
-            global_ts = compute_global_time(np.array([frame_id]), camera_info_i.fps)[0]
+            global_ts = compute_global_time(np.array([frame_id]), alphas[i], betas[i])[0]
             data['cam_id'].append(i)
             data['cam_name'].append(camera)
             data['frame_id'].append(frame_id)
@@ -223,5 +223,5 @@ def find_max_overlapping(df, contiguous):
             if overlap > max_overlap:
                 max_overlap = overlap
                 prim, sec = i, j
-    return sec, prim, max_overlap
+    return prim, sec, max_overlap
                         

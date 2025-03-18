@@ -10,7 +10,7 @@ import open3d as o3d
 
 from camera_info import Camera_info
 from data_loader import load_dataframe, find_max_overlapping
-from global_fn import compute_global_time
+from global_fn import *
 from bundles_adj import minimize_reprojection_error
 
 DATASET_NO = 4
@@ -146,6 +146,8 @@ cameras = cameras[2::3]
 
 df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
 main_camera, secondary_camera, xx = find_max_overlapping(df, contiguous)
+main_camera = 1
+secondary_camera = 3
 print(f"MAX OVERLAP Main camera: {main_camera}, Secondary camera: {secondary_camera}, with {xx} frames")
 
 main_camera_width = camera_info[main_camera].resolution[0]
@@ -156,7 +158,9 @@ secondary_camera_height = camera_info[secondary_camera].resolution[1]
 correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), timestamps_2
 frames = df[df['cam_id'] == secondary_camera][['frame_id', 'detection_x', 'detection_y', 'velocity_x', 'velocity_y', 'global_ts']].values
 frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
-beta = 0
+beta = betas[secondary_camera]
+
+plt.figure(figsize=(19,10))
 
 for frame in frames:
     global_ts = frame[5]
@@ -165,15 +169,24 @@ for frame in frames:
             x1 = float(spline_x(global_ts))
             y1 = float(spline_y(global_ts))
             correspondences.append((
-                (x1, y1),
+                (x1 + (beta/camera_info[secondary_camera].fps) * frame[3], y1 + (beta/camera_info[secondary_camera].fps) * frame[4]),
                 (frame[1], frame[2]),
                 (frame[3], frame[4]),
                 global_ts
             ))
+            
+            plt.scatter(x1, -y1, c='r', marker='o', s=1)
+            
             break
         
 if not correspondences:
     raise ValueError("No overlapping frames found between the two cameras")
+
+plt.xlim(0, main_camera_width)
+plt.ylim(-main_camera_height, 0)
+plt.title('Correspondences')
+plt.savefig('plots/correspondences.png')
+
 # Estimate the fundamental matrix
 F, mask = cv.findFundamentalMat(
     np.array([x for x, _, _, _ in correspondences]),
@@ -197,9 +210,10 @@ _, E, R, t, mask = cv.recoverPose(
     np.array([y for _, y, _, _ in correspondences]),
     camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff,
     camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff,
-    cv.RANSAC, 0.999, 3
+    cv.RANSAC, 0.999, 2
 )
 print(E/E[2, 2])
+print(np.sum(mask))
 P1 = np.dot(camera_info[main_camera].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
 P2 = np.dot(camera_info[secondary_camera].K_matrix, np.hstack((R, t)))
 # pts_camera_coord_1 = to_normalized_camera_coord(np.array([x for x, _, _, _ in correspondences]), camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff, np.eye(3), np.zeros((3,1)))
