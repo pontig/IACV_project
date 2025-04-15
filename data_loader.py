@@ -35,12 +35,10 @@ def load_detections(camera_id, dataset_no):
     """
     detections = []
     with open(f'drone-tracking-datasets/dataset{dataset_no}/detections/cam{camera_id}.txt', 'r') as f:
+        next(f)  # Skip the first line
         for line in f:
             frame_id, x, y = map(float, line.strip().split())
-            # if frame_id > 946:
-            #     detections.append((frame_id - 946, x, y))
             detections.append((frame_id, x, y))
-            
             
     return detections
 
@@ -119,16 +117,6 @@ def load_dataframe(cameras, dataset_no):
         
         cv.imwrite(f'plots/detections_on_image_camera_{i}.png', image)
         
-        # Scatter plot of detections_i
-        plt.scatter([x for _, x, _ in detections_i], [-y for _, _, y in detections_i], label=f'Camera {i}', s=1)
-        plt.xlabel('X')
-        plt.ylabel('Y')
-        plt.title(f'Detections for Camera {i}')
-        plt.xlim(0, camera_info_i.resolution[0])
-        plt.ylim(-camera_info_i.resolution[1], 0)
-
-        plt.savefig(f'plots/detections_camera_{i}.png')
-        plt.clf()
         
         # detections_i = [(frame_id, 
         #          x * camera_info_i.K_matrix[0, 0] + camera_info_i.K_matrix[0, 2] if x != 0.0 else 0.0, 
@@ -161,8 +149,10 @@ def load_dataframe(cameras, dataset_no):
         plt.savefig(f'plots/splines_camera_{i}.png')
         plt.clf()
         
+        global_tsss = []
         for frame_id, x, y in detections_i:
             global_ts = compute_global_time(np.array([frame_id]), alphas[i], betas[i])[0]
+            global_tsss.append(global_ts)
             data['cam_id'].append(i)
             data['cam_name'].append(camera)
             data['frame_id'].append(frame_id)
@@ -173,6 +163,18 @@ def load_dataframe(cameras, dataset_no):
             # Set default velocity to None
             data['velocity_x'].append(None)
             data['velocity_y'].append(None)
+            
+        # Scatter plot of detections_i
+        colors = [get_rainbow_color(ts) for ts in global_tsss if ts is not None]
+        plt.scatter([x for _, x, _ in detections_i], [-y for _, _, y in detections_i], label=f'Camera {i}', s=1, c=colors)
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.title(f'Detections for Camera {i}')
+        plt.xlim(0, camera_info_i.resolution[0])
+        plt.ylim(-camera_info_i.resolution[1], 0)
+
+        plt.savefig(f'plots/detections_camera_{i}.png')
+        plt.clf()
 
         # After processing all detections, compute forward velocity
         for j in range(len(data['frame_id']) - 1):

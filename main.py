@@ -2,7 +2,9 @@ import json
 import numpy as np
 from scipy.interpolate import CubicSpline, make_interp_spline
 from scipy.optimize import minimize
-from matplotlib import pyplot as plt
+import matplotlib
+matplotlib.use('TkAgg')  # or another GUI backend like 'Qt5Agg', 'GTK3Agg', etc.
+import matplotlib.pyplot as plt
 import random
 import cv2 as cv
 import pandas as pd
@@ -146,8 +148,11 @@ cameras = cameras[2::3]
 
 df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
 main_camera, secondary_camera, xx = find_max_overlapping(df, contiguous)
-main_camera = 1
-secondary_camera = 3
+
+main_camera = 0
+secondary_camera = 1
+xx = -1
+
 print(f"MAX OVERLAP Main camera: {main_camera}, Secondary camera: {secondary_camera}, with {xx} frames")
 
 main_camera_width = camera_info[main_camera].resolution[0]
@@ -168,14 +173,17 @@ for frame in frames:
         if np.min(tss) <= global_ts <= np.max(tss):
             x1 = float(spline_x(global_ts))
             y1 = float(spline_y(global_ts))
+            # print(f"Found overlap at {global_ts:.2f} between {np.min(tss):.2f} and {np.max(tss):.2f}: pixels {frame[1]:.2f}, {frame[2]:.2f} and {x1:.2f}, {y1:.2f}")
             correspondences.append((
-                (x1 + (beta/camera_info[secondary_camera].fps) * frame[3], y1 + (beta/camera_info[secondary_camera].fps) * frame[4]),
+                # (x1 + (beta/camera_info[secondary_camera].fps) * frame[3], y1 + (beta/camera_info[secondary_camera].fps) * frame[4]),
+                (x1, y1),
                 (frame[1], frame[2]),
                 (frame[3], frame[4]),
                 global_ts
             ))
             
-            plt.scatter(x1, -y1, c='r', marker='o', s=1)
+            color = get_rainbow_color(global_ts)
+            plt.scatter(x1, -y1, color=color, marker='o', s=1)
             
             break
         
@@ -191,12 +199,10 @@ plt.savefig('plots/correspondences.png')
 F, mask = cv.findFundamentalMat(
     np.array([x for x, _, _, _ in correspondences]),
     np.array([y for _, y, _, _ in correspondences]),
-    cv.RANSAC, 3, 0.999
+    cv.RANSAC, 8, 0.999
 )
 
-
-print(np.sum(mask))
-print(correspondences.__len__())
+print(f"Inliers: {np.sum(mask)} out of {len(correspondences)}")
 print(f"Estimated fundamental matrix: {F}")
 # correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1]
 
@@ -252,21 +258,28 @@ pts_2d_secondary = cv.projectPoints(pts_3d.T[:, :3], rvec_secondary, t, camera_i
 pts_2d_main = pts_2d_main.reshape(-1, 2)
 pts_2d_secondary = pts_2d_secondary.reshape(-1, 2)
 
+# Calculate reprojection errors
+reprojection_error_main = np.linalg.norm(pts_camera_coord_1 - pts_2d_main, axis=1)
+reprojection_error_secondary = np.linalg.norm(pts_camera_coord_2 - pts_2d_secondary, axis=1)
+
 # Plot re-projected points for main camera
-ax[1, 0].scatter(pts_2d_main[:,0], -pts_2d_main[:,1], c='r', marker='o', s=1)
+scatter_main = ax[1, 0].scatter(pts_2d_main[:, 0], -pts_2d_main[:, 1], c=reprojection_error_main, cmap='viridis', marker='o', s=1)
 ax[1, 0].set_title('Main Camera Reprojections')
 ax[1, 0].set_xlabel('X')
 ax[1, 0].set_ylabel('Y')
 ax[1, 0].axis('equal')
+fig.colorbar(scatter_main, ax=ax[1, 0], label='Reprojection Error')
 
 # Plot re-projected points for secondary camera
-ax[1, 1].scatter(pts_2d_secondary[:,0], -pts_2d_secondary[:,1], c='b', marker='o', s=1)
+scatter_secondary = ax[1, 1].scatter(pts_2d_secondary[:, 0], -pts_2d_secondary[:, 1], c=reprojection_error_secondary, cmap='viridis', marker='o', s=1)
 ax[1, 1].set_title('Secondary Camera Reprojections')
 ax[1, 1].set_xlabel('X')
 ax[1, 1].set_ylabel('Y')
 ax[1, 1].axis('equal')
+fig.colorbar(scatter_secondary, ax=ax[1, 1], label='Reprojection Error')
+fig.tight_layout()
 
-fig.savefig('plots/reprojection.png')
+fig.savefig('plots/reprojection_with_error.png')
 
 # Plot 3D points
 fig_3d = plt.figure(figsize=(10, 10))

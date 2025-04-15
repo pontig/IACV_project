@@ -2,3 +2,6 @@ drone-tracking-datasets/
 .venv/
 __pycache__/
 .vscode/
+plots/
+
+detections.csv
