@@ -22,7 +22,6 @@ def interpolate_trajectory(detections, time_stamps):
     spline_x = make_interp_spline(time_stamps, detections[:, 1], k=3)
     spline_y = make_interp_spline(time_stamps, detections[:, 2], k=3)
 
-    
     return spline_x, spline_y
 
 def load_detections(camera_id, dataset_no):
@@ -116,17 +115,13 @@ def load_dataframe(cameras, dataset_no):
                 cv.circle(image, (int(x), int(y)), 2, (0, 255, 0), -1)
         
         cv.imwrite(f'plots/detections_on_image_camera_{i}.png', image)
-        
-        
-        # detections_i = [(frame_id, 
-        #          x * camera_info_i.K_matrix[0, 0] + camera_info_i.K_matrix[0, 2] if x != 0.0 else 0.0, 
-        #          y * camera_info_i.K_matrix[1, 1] + camera_info_i.K_matrix[1, 2] if y != 0.0 else 0.0) 
-        #         for frame_id, x, y in detections_i]
+
         frame_indices_i = np.array([frame_id for frame_id, _, _ in detections_i])
         contiguous_i = find_contiguous_regions(detections_i)
         splines_i = []
         for start_frame, end_frame in contiguous_i:
-            timestamps_j = compute_global_time(frame_indices_i[int(start_frame-1):int(end_frame-1)], alphas[i], betas[i])
+            # timestamps_j = compute_global_time(frame_indices_i[int(start_frame-1):int(end_frame-1)], alphas[i], betas[i])
+            timestamps_j = compute_global_time(frame_indices_i[int(start_frame-1):int(end_frame-1)], 1)
             if len(timestamps_j) > 3:
                 spline_x, spline_y = interpolate_trajectory(detections_i[int(start_frame-1):int(end_frame-1)], timestamps_j)
                 splines_i.append((spline_x, spline_y, timestamps_j))
@@ -151,7 +146,8 @@ def load_dataframe(cameras, dataset_no):
         
         global_tsss = []
         for frame_id, x, y in detections_i:
-            global_ts = compute_global_time(np.array([frame_id]), alphas[i], betas[i])[0]
+            # global_ts = compute_global_time(np.array([frame_id]), alphas[i], betas[i])[0]
+            global_ts = compute_global_time(np.array([frame_id]), 1)[0]
             global_tsss.append(global_ts)
             data['cam_id'].append(i)
             data['cam_name'].append(camera)
@@ -198,32 +194,3 @@ def load_dataframe(cameras, dataset_no):
     df.to_csv('detections.csv', index=False)
     print("Done")
     return df, splines, contiguous, camera_info
-
-
-def find_max_overlapping(df, contiguous):
-    """
-    Find the pair of cameras with the maximum overlapping time.
-    
-    df: DataFrame with detections
-    contiguous: List of contiguous time intervals for each camera
-    
-    Returns: Camera ids with maximum overlapping time
-    """
-    max_overlap = 0
-    prim, sec = None, None
-    
-    for i in range(len(contiguous)):
-        for j in range(len(contiguous)):
-            if i == j:
-                continue
-            overlap = 0
-            for ts in df[df['cam_id'] == i]['global_ts']:
-                for start, end in contiguous[j]:
-                    if start <= ts <= end:
-                        overlap += 1
-                        break
-            if overlap > max_overlap:
-                max_overlap = overlap
-                prim, sec = i, j
-    return prim, sec, max_overlap
-                        

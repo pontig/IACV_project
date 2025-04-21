@@ -1,9 +1,9 @@
 import json
+import warnings
 import numpy as np
 from scipy.interpolate import CubicSpline, make_interp_spline
 from scipy.optimize import minimize
 import matplotlib
-matplotlib.use('TkAgg')  # or another GUI backend like 'Qt5Agg', 'GTK3Agg', etc.
 import matplotlib.pyplot as plt
 import random
 import cv2 as cv
@@ -11,109 +11,17 @@ import pandas as pd
 import open3d as o3d
 
 from camera_info import Camera_info
-from data_loader import load_dataframe, find_max_overlapping
+from data_loader import load_dataframe
 from global_fn import *
 from bundles_adj import minimize_reprojection_error
 
 DATASET_NO = 4
+inliers_coarse = []
+inliers_fine = []
+inliers_finer = []
+inliers_finest = []
 
 figsize = (28, 15)
-
-def estimate_time_shift(F, xi, xk, vk, max_iterations=1000, threshold=0.1, min_inliers=10):
-    """
-    Estimate the time shift between two cameras using RANSAC.
-    
-    Parameters:
-    -----------
-    F : ndarray
-        Fundamental matrix
-    xi : ndarray
-        Points from camera i (N x 2)
-    xk : ndarray
-        Points from camera k (N x 2)
-    vk : ndarray
-        Velocities from camera k (N x 2)
-    max_iterations : int, optional
-        Maximum number of RANSAC iterations
-    threshold : float, optional
-        Threshold for considering a point as an inlier
-    min_inliers : int, optional
-        Minimum number of inliers required for a model to be considered valid
-    
-    Returns:
-    --------
-    float
-        Estimated time shift (beta) between cameras
-    list
-        Indices of inliers
-    """
-
-    # Make sure all inputs are numpy arrays
-    xi = np.array(xi)
-    xk = np.array(xk)
-    vk = np.array(vk)
-    
-    if len(xi) < 3:
-        raise ValueError("Need at least 3 point correspondences")
-    
-    best_beta = 0
-    best_inliers = []
-    best_inlier_count = 0
-    
-    # Calculate all possible beta values for later evaluation
-    all_beta_values = []
-    for i in range(len(xi)):
-        x1_h = np.append(xi[i], 1)  # Homogeneous coordinates for point in camera i
-        x2_h = np.append(xk[i], 1)  # Homogeneous coordinates for point in camera k
-        v2_h = np.append(vk[i], 0)  # Homogeneous coordinates for velocity (append 0)
-        
-        numerator = np.dot(x2_h.T, np.dot(F, x1_h))
-        denominator = np.dot(v2_h.T, np.dot(F, x1_h))
-        
-        if np.abs(denominator) > 1e-6:  # Avoid division by zero
-            beta_ik = -numerator / denominator
-            all_beta_values.append((i, beta_ik))
-    
-    # RANSAC implementation
-    for _ in (range(max_iterations)):
-        # 1. Randomly select a sample of 3 correspondences
-        if len(all_beta_values) < 3:
-            continue
-            
-        sample_indices = random.sample(range(len(all_beta_values)), 3)
-        sample_betas = [all_beta_values[i][1] for i in sample_indices]
-        
-        # 2. Compute model from the sample (median beta value)
-        model_beta = np.median(sample_betas)
-        
-        # Skip if the model is invalid
-        if np.isnan(model_beta) or np.isinf(model_beta) or np.abs(model_beta) > 10:
-            continue
-        
-        # 3. Calculate inliers based on reprojection error
-        inliers = []
-        for idx, beta_val in all_beta_values:
-            # Calculate error as the difference between predicted beta and actual beta
-            error = np.abs(beta_val - model_beta)
-            if error < threshold:
-                inliers.append(idx)
-        
-        # 4. Save the model if it has more inliers
-        if len(inliers) > best_inlier_count and len(inliers) >= min_inliers:
-            best_inlier_count = len(inliers)
-            best_inliers = inliers
-            
-            # Recalculate beta using all inliers
-            inlier_betas = [all_beta_values[i][1] for i in range(len(all_beta_values)) if all_beta_values[i][0] in inliers]
-            best_beta = np.median(inlier_betas)
-    
-    # If RANSAC failed to find a good model, use median of all values
-    if not best_inliers:
-        print("RANSAC could not find a consistent model. Using median of all beta values.")
-        best_beta = np.median([b for _, b in all_beta_values])
-        best_inliers = list(range(len(xi)))
-    
-    return best_beta
 
 def to_normalized_camera_coord(pts, K, distcoeff, R, t):
     """
@@ -141,153 +49,213 @@ def to_normalized_camera_coord(pts, K, distcoeff, R, t):
     
     return pts_normalized
    
-    
+print("Loading camera info") 
 with open(f"drone-tracking-datasets/dataset{DATASET_NO}/cameras.txt", 'r') as f:
     cameras = f.read().strip().split()    
 cameras = cameras[2::3]
+print(f"Loaded {len(cameras)} cameras")
 
+print("Loading dataframe")
 df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
-main_camera, secondary_camera, xx = find_max_overlapping(df, contiguous)
 
-main_camera = 0
-secondary_camera = 1
+main_camera = 3 #col
+secondary_camera = 1 #row
 xx = -1
 
 print(f"MAX OVERLAP Main camera: {main_camera}, Secondary camera: {secondary_camera}, with {xx} frames")
+
+print(f"fps: {camera_info[main_camera].fps}, {camera_info[secondary_camera].fps}")
 
 main_camera_width = camera_info[main_camera].resolution[0]
 main_camera_height = camera_info[main_camera].resolution[1]
 secondary_camera_width = camera_info[secondary_camera].resolution[0]
 secondary_camera_height = camera_info[secondary_camera].resolution[1]
 
-correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), timestamps_2
-frames = df[df['cam_id'] == secondary_camera][['frame_id', 'detection_x', 'detection_y', 'velocity_x', 'velocity_y', 'global_ts']].values
+frames = df[df['cam_id'] == secondary_camera][['frame_id', 'detection_x', 'detection_y']].values
 frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
-beta = betas[secondary_camera]
+beta = 0  # Initialize with default value
 
-plt.figure(figsize=(19,10))
-
-for frame in frames:
-    global_ts = frame[5]
-    for spline_x, spline_y, tss in splines[main_camera]:
-        if np.min(tss) <= global_ts <= np.max(tss):
-            x1 = float(spline_x(global_ts))
-            y1 = float(spline_y(global_ts))
-            # print(f"Found overlap at {global_ts:.2f} between {np.min(tss):.2f} and {np.max(tss):.2f}: pixels {frame[1]:.2f}, {frame[2]:.2f} and {x1:.2f}, {y1:.2f}")
-            correspondences.append((
-                # (x1 + (beta/camera_info[secondary_camera].fps) * frame[3], y1 + (beta/camera_info[secondary_camera].fps) * frame[4]),
-                (x1, y1),
-                (frame[1], frame[2]),
-                (frame[3], frame[4]),
-                global_ts
-            ))
+def find_beta(b, inliers_list):
+    correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), (v2x, v2y), timestamps_2
+    for frame in frames:
+        global_ts = compute_global_time(frame[0], camera_info[main_camera].fps/camera_info[secondary_camera].fps, b)
+        for spline_x, spline_y, tss in splines[main_camera]:
+            if np.min(tss) <= global_ts <= np.max(tss):
+                x1 = float(spline_x(global_ts))
+                y1 = float(spline_y(global_ts))
+                correspondences.append((
+                    (x1, y1),
+                    (frame[1], frame[2]),
+                    (frame[1], frame[2]),
+                    # (frame[3], frame[4]),
+                    global_ts
+                ))
+                            
+                break
             
-            color = get_rainbow_color(global_ts)
-            plt.scatter(x1, -y1, color=color, marker='o', s=1)
-            
-            break
-        
-if not correspondences:
-    raise ValueError("No overlapping frames found between the two cameras")
+    if not correspondences:
+        warnings.warn("No overlapping frames found between the two cameras for beta: " + str(b))
+        inliers_list.append(0)
+        return 0
 
-plt.xlim(0, main_camera_width)
-plt.ylim(-main_camera_height, 0)
-plt.title('Correspondences')
-plt.savefig('plots/correspondences.png')
+    # Estimate the fundamental matrix
+    F, mask = cv.findFundamentalMat(
+        np.array([x for x, _, _, _ in correspondences]),
+        np.array([y for _, y, _, _ in correspondences]),
+        cv.RANSAC
+    )
 
-# Estimate the fundamental matrix
-F, mask = cv.findFundamentalMat(
-    np.array([x for x, _, _, _ in correspondences]),
-    np.array([y for _, y, _, _ in correspondences]),
-    cv.RANSAC, 8, 0.999
-)
-
-print(f"Inliers: {np.sum(mask)} out of {len(correspondences)}")
-print(f"Estimated fundamental matrix: {F}")
-# correspondences = [correspondences[i] for i in range(len(correspondences)) if mask[i] == 1]
-
-# Essential matrix
-E = camera_info[secondary_camera].K_matrix.T @ F @ camera_info[main_camera].K_matrix
-print(f"Estimated essential matrix:\n {E/E[2, 2]}")
+    inlier_ratio = np.sum(mask) / len(mask) if mask is not None else 0
+    print(f"beta: {b:.3f}, inliers: {inlier_ratio:.4f}, correspondences: {len(correspondences)}")
+    inliers_list.append(inlier_ratio)
+    return inlier_ratio
 
 
-_, E, R, t, mask = cv.recoverPose(
-    np.array([x for x, _, _, _ in correspondences]),
-    np.array([y for _, y, _, _ in correspondences]),
-    camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff,
-    camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff,
-    cv.RANSAC, 0.999, 2
-)
-print(E/E[2, 2])
-print(np.sum(mask))
-P1 = np.dot(camera_info[main_camera].K_matrix, np.hstack((np.eye(3), np.zeros((3, 1)))))
-P2 = np.dot(camera_info[secondary_camera].K_matrix, np.hstack((R, t)))
-# pts_camera_coord_1 = to_normalized_camera_coord(np.array([x for x, _, _, _ in correspondences]), camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff, np.eye(3), np.zeros((3,1)))
-# pts_camera_coord_2 = to_normalized_camera_coord(np.array([y for _, y, _, _ in correspondences]), camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff, R, t)
-pts_camera_coord_1 = np.array([x for x, _, _, _ in correspondences])
-pts_camera_coord_2 = np.array([y for _, y, _, _ in correspondences])
+coarse_step = 5
+fine_step = 1
+finer_step = 0.1
+finest_step = 0.01
 
-fig, ax = plt.subplots(2, 2, figsize=(15, 7))
+# Step 1: Coarse Search
+print("\n=== Coarse Search ===")
+beta_shift = 100
+beta_coarse = np.arange(-beta_shift, beta_shift, coarse_step)
+beta_values_coarse = []
 
-# Plot points in camera coordinates for main camera
-ax[0, 0].scatter(pts_camera_coord_1[:, 0], -pts_camera_coord_1[:, 1], c='r', marker='o', s=1)
-ax[0, 0].set_title('Main Camera Coordinates')
-ax[0, 0].set_xlabel('X')
-ax[0, 0].set_ylabel('Y')
-ax[0, 0].axis('equal')
+for b in beta_coarse:
+    find_beta(b, inliers_coarse)
+    beta_values_coarse.append(b)
+    
+best_beta_coarse = beta_coarse[np.argmax(inliers_coarse)]
+max_inliers_coarse = np.max(inliers_coarse)
+print(f"End of coarse search")
+print(f"Best beta (coarse): {best_beta_coarse}, inliers: {max_inliers_coarse:.4f}")
 
-# Plot points in camera coordinates for secondary camera
-ax[0, 1].scatter(pts_camera_coord_2[:, 0], -pts_camera_coord_2[:, 1], c='b', marker='o', s=1)
-ax[0, 1].set_title('Secondary Camera Coordinates')
-ax[0, 1].set_xlabel('X')
-ax[0, 1].set_ylabel('Y')
-ax[0, 1].axis('equal')
+# Step 2: Fine Search
+print("\n=== Fine Search ===")
+beta_fine = np.arange(best_beta_coarse - 100, best_beta_coarse + 100, fine_step)
+beta_values_fine = []
 
-# Triangulate points
-pts_3d = cv.triangulatePoints(P1, P2, pts_camera_coord_1.T, pts_camera_coord_2.T)
-pts_3d /= pts_3d[3]
+for b in beta_fine:
+    find_beta(b, inliers_fine)
+    beta_values_fine.append(b)
 
-# Re-project points onto the image planes
-# Convert rotation matrices to rotation vectors using Rodrigues
-rvec_main, _ = cv.Rodrigues(np.eye(3))
-rvec_secondary, _ = cv.Rodrigues(R)
+best_beta_fine = beta_fine[np.argmax(inliers_fine)]
+max_inliers_fine = np.max(inliers_fine)
+print(f"End of fine search")
+print(f"Best beta (fine): {best_beta_fine}, inliers: {max_inliers_fine:.4f}")
 
-# Project 3D points to 2D image plane
-pts_2d_main = cv.projectPoints(pts_3d.T[:, :3], rvec_main, np.zeros(3), camera_info[main_camera].K_matrix, camera_info[main_camera].distCoeff)[0]
-pts_2d_secondary = cv.projectPoints(pts_3d.T[:, :3], rvec_secondary, t, camera_info[secondary_camera].K_matrix, camera_info[secondary_camera].distCoeff)[0]
-pts_2d_main = pts_2d_main.reshape(-1, 2)
-pts_2d_secondary = pts_2d_secondary.reshape(-1, 2)
+# Step 3: Finer Search
+print("\n=== Finer Search ===")
+beta_finer = np.arange(best_beta_fine - 10, best_beta_fine + 10, finer_step)
+beta_values_finer = []
 
-# Calculate reprojection errors
-reprojection_error_main = np.linalg.norm(pts_camera_coord_1 - pts_2d_main, axis=1)
-reprojection_error_secondary = np.linalg.norm(pts_camera_coord_2 - pts_2d_secondary, axis=1)
+for b in beta_finer:
+    find_beta(b, inliers_finer)
+    beta_values_finer.append(b)
 
-# Plot re-projected points for main camera
-scatter_main = ax[1, 0].scatter(pts_2d_main[:, 0], -pts_2d_main[:, 1], c=reprojection_error_main, cmap='viridis', marker='o', s=1)
-ax[1, 0].set_title('Main Camera Reprojections')
-ax[1, 0].set_xlabel('X')
-ax[1, 0].set_ylabel('Y')
-ax[1, 0].axis('equal')
-fig.colorbar(scatter_main, ax=ax[1, 0], label='Reprojection Error')
+best_beta_finer = beta_finer[np.argmax(inliers_finer)]
+max_inliers_finer = np.max(inliers_finer)
+print(f"End of finer search")
+print(f"Best beta (finer): {best_beta_finer}, inliers: {max_inliers_finer:.4f}")
 
-# Plot re-projected points for secondary camera
-scatter_secondary = ax[1, 1].scatter(pts_2d_secondary[:, 0], -pts_2d_secondary[:, 1], c=reprojection_error_secondary, cmap='viridis', marker='o', s=1)
-ax[1, 1].set_title('Secondary Camera Reprojections')
-ax[1, 1].set_xlabel('X')
-ax[1, 1].set_ylabel('Y')
-ax[1, 1].axis('equal')
-fig.colorbar(scatter_secondary, ax=ax[1, 1], label='Reprojection Error')
-fig.tight_layout()
+# Step 4: Finest Search
+print("\n=== Finest Search ===")
+beta_finest = np.arange(best_beta_finer - 1, best_beta_finer + 1, finest_step)
+beta_values_finest = []
 
-fig.savefig('plots/reprojection_with_error.png')
+for b in beta_finest:
+    find_beta(b, inliers_finest)
+    beta_values_finest.append(b)
 
-# Plot 3D points
-fig_3d = plt.figure(figsize=(10, 10))
-ax_3d = fig_3d.add_subplot(111, projection='3d')
-ax_3d.scatter(pts_3d[0], pts_3d[1], pts_3d[2], c='g', marker='o', s=1)
-ax_3d.set_title('3D Points')
-ax_3d.set_xlabel('X')
-ax_3d.set_ylabel('Y')
-ax_3d.set_zlabel('Z')
+best_beta_finest = beta_finest[np.argmax(inliers_finest)]
+max_inliers_finest = np.max(inliers_finest)
+print(f"End of finest search")
+print(f"Best beta (finest): {best_beta_finest}, inliers: {max_inliers_finest:.4f}")
 
-# plt.show()
+# Final result
+print("\n=== Final Result ===")
+print(f"Best beta: {best_beta_finest}, inliers: {max_inliers_finest:.4f}")
+# Plot the results for all refinement levels
+plt.figure(figsize=figsize)
+
+# Create a figure with 2 rows and 2 columns
+fig, axes = plt.subplots(2, 2, figsize=figsize)
+fig.suptitle('Beta Search Refinement Process', fontsize=20)
+
+# Coarse search plot
+axes[0, 0].plot(beta_values_coarse, inliers_coarse, 'b.-', markersize=3, label='Inliers')
+axes[0, 0].axvline(x=best_beta_coarse, color='r', linestyle='--', 
+                  label=f'Best β={best_beta_coarse} (inliers={max_inliers_coarse:.4f})')
+axes[0, 0].set_title('Coarse Search (step=50)')
+axes[0, 0].set_xlabel('Beta')
+axes[0, 0].set_ylabel('Inlier Ratio')
+axes[0, 0].set_ylim(-0.1, 1.1)
+axes[0, 0].grid(True, alpha=0.3)
+axes[0, 0].legend()
+
+# Fine search plot
+axes[0, 1].plot(beta_values_fine, inliers_fine, 'r.-', markersize=3, label='Inliers')
+axes[0, 1].axvline(x=best_beta_fine, color='b', linestyle='--', 
+                  label=f'Best β={best_beta_fine} (inliers={max_inliers_fine:.4f})')
+axes[0, 1].set_title(f'Fine Search (step=5, range={best_beta_coarse}±100)')
+axes[0, 1].set_xlabel('Beta')
+axes[0, 1].set_ylabel('Inlier Ratio')
+axes[0, 1].set_ylim(-0.1, 1.1)
+axes[0, 1].grid(True, alpha=0.3)
+axes[0, 1].legend()
+
+# Finer search plot
+axes[1, 0].plot(beta_values_finer, inliers_finer, 'g.-', markersize=3, label='Inliers')
+axes[1, 0].axvline(x=best_beta_finer, color='b', linestyle='--', 
+                  label=f'Best β={best_beta_finer} (inliers={max_inliers_finer:.4f})')
+axes[1, 0].set_title(f'Finer Search (step=0.5, range={best_beta_fine}±10)')
+axes[1, 0].set_xlabel('Beta')
+axes[1, 0].set_ylabel('Inlier Ratio')
+axes[1, 0].set_ylim(-0.1, 1.1)
+axes[1, 0].grid(True, alpha=0.3)
+axes[1, 0].legend()
+
+# Finest search plot
+axes[1, 1].plot(beta_values_finest, inliers_finest, 'm.-', markersize=5, label='Inliers')
+axes[1, 1].axvline(x=best_beta_finest, color='b', linestyle='--', 
+                  label=f'Best β={best_beta_finest} (inliers={max_inliers_finest:.4f})')
+axes[1, 1].set_title(f'Finest Search (step=0.05, range={best_beta_finer}±1)')
+axes[1, 1].set_xlabel('Beta')
+axes[1, 1].set_ylabel('Inlier Ratio')
+axes[1, 1].set_ylim(-0.1, 1.1)
+axes[1, 1].grid(True, alpha=0.3)
+axes[1, 1].legend()
+
+plt.tight_layout()
+plt.subplots_adjust(top=0.92)
+plt.savefig(f"plots/inliers_vs_beta_refinement_{DATASET_NO}.png", dpi=300)
+
+# Combined visualization in one plot with different colors and transparency
+plt.figure(figsize=figsize)
+plt.plot(beta_values_coarse, inliers_coarse, 'b-', alpha=0.5, linewidth=1, label='Coarse (step=50)')
+plt.plot(beta_values_fine, inliers_fine, 'r-', alpha=0.6, linewidth=1.5, label='Fine (step=5)')
+plt.plot(beta_values_finer, inliers_finer, 'g-', alpha=0.7, linewidth=2, label='Finer (step=0.5)')
+plt.plot(beta_values_finest, inliers_finest, 'm-', alpha=1.0, linewidth=2.5, label='Finest (step=0.05)')
+
+# Mark the best beta for each refinement level
+plt.scatter(best_beta_coarse, max_inliers_coarse, c='blue', marker='*', s=200, 
+           label=f'Best β (Coarse)={best_beta_coarse}')
+plt.scatter(best_beta_fine, max_inliers_fine, c='red', marker='*', s=200, 
+           label=f'Best β (Fine)={best_beta_fine}')
+plt.scatter(best_beta_finer, max_inliers_finer, c='green', marker='*', s=200, 
+           label=f'Best β (Finer)={best_beta_finer}')
+plt.scatter(best_beta_finest, max_inliers_finest, c='magenta', marker='*', s=300, 
+           label=f'Best β (Finest)={best_beta_finest}')
+
+plt.title('Multi-level Beta Search Refinement', fontsize=18)
+plt.xlabel('Beta', fontsize=14)
+plt.ylabel('Inlier Ratio', fontsize=14)
+plt.ylim(-0.1, 1.1)
+plt.grid(True, alpha=0.3)
+plt.legend(fontsize=12)
+plt.tight_layout()
+plt.savefig(f"plots/inliers_vs_beta_combined_{DATASET_NO}.png", dpi=300)
+
+# Print final conclusion
+print(f"\nFinal conclusion: The optimal time shift between cameras {main_camera} and {secondary_camera} is beta = {best_beta_finest:.2f}")
