@@ -58,8 +58,8 @@ print(f"Loaded {len(cameras)} cameras")
 print("Loading dataframe")
 df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
 
-main_camera = 3 #col
-secondary_camera = 1 #row
+main_camera = 1 #col
+secondary_camera = 2 #row
 xx = -1
 
 print(f"MAX OVERLAP Main camera: {main_camera}, Secondary camera: {secondary_camera}, with {xx} frames")

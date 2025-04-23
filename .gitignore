@@ -5,3 +5,5 @@ __pycache__/
 plots/
 
 detections.csv
+
+logs/
