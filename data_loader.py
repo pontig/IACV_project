@@ -123,7 +123,7 @@ def load_dataframe(cameras, dataset_no):
             # timestamps_j = compute_global_time(frame_indices_i[int(start_frame-1):int(end_frame-1)], alphas[i], betas[i])
             timestamps_j = compute_global_time(frame_indices_i[int(start_frame-1):int(end_frame-1)], 1)
             if len(timestamps_j) > 3:
-                spline_x, spline_y = interpolate_trajectory(detections_i[int(start_frame-1):int(end_frame-1)], timestamps_j)
+                spline_x, spline_y = interpolate_trajectory(detections_i[int(start_frame-1):int(end_frame-2)], timestamps_j[:len(timestamps_j)-1])
                 splines_i.append((spline_x, spline_y, timestamps_j))
         splines.append(splines_i)
         camera_info.append(camera_info_i)
