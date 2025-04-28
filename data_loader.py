@@ -89,8 +89,8 @@ def load_dataframe(cameras, dataset_no):
         'velocity_x': [],
         'velocity_y': []
     }
-    plt.figure(figsize=(19, 10))
     for i, camera in enumerate(cameras):
+        plt.figure(figsize=(19, 10))
         camera_info_i = get_camera_info(camera)
         detections_i = load_detections(i, dataset_no)
         
@@ -143,6 +143,8 @@ def load_dataframe(cameras, dataset_no):
         plt.ylim(-camera_info_i.resolution[1], 0)
         plt.savefig(f'plots/splines_camera_{i}.png')
         plt.clf()
+        plt.close()
+        
         
         global_tsss = []
         for frame_id, x, y in detections_i:
@@ -159,7 +161,8 @@ def load_dataframe(cameras, dataset_no):
             # Set default velocity to None
             data['velocity_x'].append(None)
             data['velocity_y'].append(None)
-            
+        
+        plt.figure(figsize=(19, 10))    
         # Scatter plot of detections_i
         colors = [get_rainbow_color(ts) for ts in global_tsss if ts is not None]
         plt.scatter([x for _, x, _ in detections_i], [-y for _, _, y in detections_i], label=f'Camera {i}', s=1, c=colors)

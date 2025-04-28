@@ -382,6 +382,8 @@ def to_normalized_camera_coord(pts, K, distcoeff):
 
 if __name__ == "__main__":
     
+    camera_poses = []
+    
     # Load camera info
     logging.info("Loading camera info")
     with open(f"drone-tracking-datasets/dataset{DATASET_NO}/cameras.txt", 'r') as f:
@@ -412,6 +414,17 @@ if __name__ == "__main__":
     secondary_pts_normalized = to_normalized_camera_coord(np.array([y for _, y, _ in correspondences]), camera_info[int(secondary_camera)].K_matrix, camera_info[int(secondary_camera)].distCoeff)
     
     _, R, t, mask, triangulated_points = cv.recoverPose(E, main_pts_normalized, secondary_pts_normalized, cameraMatrix=np.eye(3), distanceThresh=100)
+    
+    camera_poses.append({
+        "cam_id": int(main_camera),
+        "R": np.eye(3),
+        "t": np.zeros((3, 1)),
+    })
+    camera_poses.append({
+        "cam_id": int(secondary_camera),
+        "R": R,
+        "t": t,
+    })            
     
     triangulated_points /= triangulated_points[3]
     triangulated_points = triangulated_points[:3]
@@ -467,25 +480,18 @@ if __name__ == "__main__":
         spline_y = make_interp_spline(ts, spline_points[:, 1], k=3)
         spline_z = make_interp_spline(ts, spline_points[:, 2], k=3)
         
-        splines_3d.append((spline_x, spline_y, spline_z, ts))
-        
-    # plot splines
-    fig = plt.figure(figsize=(15, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    for spline in splines_3d:
-        spline_x, spline_y, spline_z, ts = spline
-        ax.plot(spline_x(ts), spline_y(ts), spline_z(ts), label=f"Spline {ts[0]}-{ts[-1]}")
-    ax.set_title(f"3D Splines for Cameras {main_camera} and {secondary_camera}")
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_zlabel("Z")  
+        splines_3d.append((spline_x, spline_y, spline_z, ts)) 
     
     plot_triangulated_points(triangulated_points, main_camera, secondary_camera)
     plot_reprojection_analysis(
-        triangulated_points, correspondences, 
+        triangulated_points, np.array([x for x, _, _ in correspondences]),
+        np.zeros((3, 1)), np.zeros((3, 1)),
+        camera_info[int(main_camera)], int(main_camera)
+    )
+    plot_reprojection_analysis(
+        triangulated_points, np.array([y for _, y, _ in correspondences]),
         R, t,
-        camera_info[int(main_camera)], camera_info[int(secondary_camera)],
-        main_camera, secondary_camera
+        camera_info[int(secondary_camera)], int(secondary_camera)
     )
     plot_3d_splines(triangulated_points, correspondences, main_camera, secondary_camera)
 
@@ -534,37 +540,72 @@ if __name__ == "__main__":
         flags=cv.SOLVEPNP_ITERATIVE
     )
     
+    camera_poses.append({
+        "cam_id": int(third_camera),
+        "R": cv.Rodrigues(rvec)[0],
+        "t": tvec,
+    })
+    
+    # plot splines
+    fig = plt.figure(figsize=(15, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    for spline in splines_3d:
+        spline_x, spline_y, spline_z, ts = spline
+        ax.plot(spline_x(ts), spline_y(ts), spline_z(ts))
+    for camera_pose in camera_poses:
+        cam_id = camera_pose["cam_id"]
+        R = camera_pose["R"]
+        t = camera_pose["t"].flatten()
+        ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=30)
+    ax.set_title(f"3D Splines")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.legend()
+        
     print(f"Rotation vector: {rvec}")
     print(f"Translation vector: {tvec}")
     print(f"Inlier ratio: {len(inliers) / len(correspondences_2)}")
     print(f"Number of inliers: {len(inliers)}")
     
-    # Transform points from homogeneous to Euclidean
-    third_reprojected_points, _ = cv.projectPoints(
-        triangulated_points, rvec, tvec, 
-        camera_info[int(third_camera)].K_matrix, camera_info[int(third_camera)].distCoeff
+    plot_reprojection_analysis(
+        triangulated_points, np.array([x for _, x, _ in correspondences_2]),
+        rvec, tvec,
+        camera_info[int(third_camera)], int(third_camera)
     )
-    third_reprojected_points = third_reprojected_points.reshape(-1, 2)
-
-    # Plot the reprojection
-    plt.figure(figsize=(19,10))
-    plt.scatter(
-        [y[0] for _, y, _ in correspondences_2], 
-        [-y[1] for _, y, _ in correspondences_2], 
-        c='blue', label='Original Points', alpha=0.6, s=1
-    )
-    plt.scatter(
-        third_reprojected_points[:, 0], 
-        -third_reprojected_points[:, 1], 
-        c='red', label='Reprojected Points', alpha=0.6, s=1
-    )
-    plt.title(f"Reprojection Analysis for Camera {third_camera}")
-    plt.xlabel("X")
-    plt.ylabel("Y")
-    plt.xlim(0, camera_info[int(third_camera)].resolution[0])
-    plt.ylim(-camera_info[int(third_camera)].resolution[1], 0)
-    plt.legend()
-    plt.savefig(f"plots/reprojection_analysis_camera_{third_camera}.png", dpi=300)
     
+    # Plot camera poses with arrows along the z-direction and highlight the xy-plane
+    fig = plt.figure(figsize=(15, 10))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot the xy-plane
+    plane_size = 10
+    xx, yy = np.meshgrid(np.linspace(-plane_size, plane_size, 10), np.linspace(-plane_size, plane_size, 10))
+    zz = np.zeros_like(xx)
+    ax.plot_surface(xx, yy, zz, alpha=0.2, color='gray')
+
+    # Plot camera poses
+    for pose in camera_poses:
+        cam_id = pose["cam_id"]
+        R = pose["R"]
+        t = pose["t"].flatten()
+
+        # Plot camera position
+        ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=100)
+
+        # Plot arrow along the z-direction
+        z_dir = R @ np.array([0, 0, 1])  # Transform z-direction
+        ax.quiver(
+            t[0], t[1], t[2], 
+            z_dir[0], z_dir[1], z_dir[2], 
+            length=1.0, color='blue', linewidth=2
+        )
+
+    # Set plot labels and title
+    ax.set_title("Camera Poses with Z-Direction Arrows")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.legend()
     
     plt.show()

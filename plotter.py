@@ -96,63 +96,35 @@ def plot_triangulated_points(triangulated_points, main_camera, secondary_camera,
     ax.set_title('Triangulated Points')
     plt.savefig(f"{output_dir}/triangulated_points_{main_camera}_{secondary_camera}.png", dpi=300)
 
-
 def plot_reprojection_analysis(
-    triangulated_points, correspondences, 
-    R, t, main_camera_info, secondary_camera_info, 
-    main_camera_id, secondary_camera_id, output_dir="plots"
+    points_3d, original_points_2d, 
+    R, t, camera_info, camera_id, output_dir="plots"
 ):
-    """Plot reprojected 2D points for both main and secondary cameras."""
-    # Reproject onto main camera
-    main_reprojected_points, _ = cv.projectPoints(
-        triangulated_points, np.zeros((3, 1)), np.zeros((3, 1)),
-        main_camera_info.K_matrix, main_camera_info.distCoeff
+    """Plot reprojected 2D points for a single camera."""
+    # Reproject points
+    reprojected_points, _ = cv.projectPoints(
+        points_3d, R, t,
+        camera_info.K_matrix, camera_info.distCoeff
     )
-    main_reprojected_points = main_reprojected_points.reshape(-1, 2)
+    reprojected_points = reprojected_points.reshape(-1, 2)
 
-    # Reproject onto secondary camera
-    secondary_reprojected_points, _ = cv.projectPoints(
-        triangulated_points, R, t,
-        secondary_camera_info.K_matrix, secondary_camera_info.distCoeff
-    )
-    secondary_reprojected_points = secondary_reprojected_points.reshape(-1, 2)
+    plt.figure(figsize=(19, 10))
+    plt.title(f"Reprojection Analysis for Camera {camera_id}")
 
-    fig, axes = plt.subplots(2, 1, figsize=(10, 20))
-    fig.suptitle(f"Reprojection Analysis for Cameras {main_camera_id} and {secondary_camera_id}", fontsize=20)
-
-    # Main camera
-    axes[0].scatter(main_reprojected_points[:, 0], -main_reprojected_points[:, 1], c='r', label='Reprojected Points', s=1)
-    axes[0].scatter(
-        [x[0] for x, _, _ in correspondences], 
-        [-x[1] for x, _, _ in correspondences], 
+    # Plot reprojected points
+    plt.scatter(reprojected_points[:, 0], -reprojected_points[:, 1], c='r', label='Reprojected Points', s=1)
+    plt.scatter(
+        original_points_2d[:, 0], -original_points_2d[:, 1],
         c='b', label='Original Points', alpha=0.5, s=1
     )
-    axes[0].set_title(f"Main Camera {main_camera_id}")
-    axes[0].set_xlabel("X")
-    axes[0].set_ylabel("Y")
-    axes[0].legend()
-    axes[0].set_xlim(0, main_camera_info.resolution[0])
-    axes[0].set_ylim(-main_camera_info.resolution[1], 0)
-    axes[0].grid(True, alpha=0.3)
-
-    # Secondary camera
-    axes[1].scatter(secondary_reprojected_points[:, 0], -secondary_reprojected_points[:, 1], c='r', label='Reprojected Points', s=1)
-    axes[1].scatter(
-        [y[0] for _, y, _ in correspondences], 
-        [-y[1] for _, y, _ in correspondences], 
-        c='b', label='Original Points', alpha=0.5, s=1
-    )
-    axes[1].set_title(f"Secondary Camera {secondary_camera_id}")
-    axes[1].set_xlabel("X")
-    axes[1].set_ylabel("Y")
-    axes[1].legend()
-    axes[1].set_xlim(0, secondary_camera_info.resolution[0])
-    axes[1].set_ylim(-secondary_camera_info.resolution[1], 0)
-    axes[1].grid(True, alpha=0.3)
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.legend()
+    plt.xlim(0, camera_info.resolution[0])
+    plt.ylim(-camera_info.resolution[1], 0)
 
     plt.tight_layout()
-    plt.subplots_adjust(top=0.92)
-    plt.savefig(f"{output_dir}/reprojection_analysis_cameras_{main_camera_id}_{secondary_camera_id}.png", dpi=300)
+    plt.savefig(f"{output_dir}/reprojection_analysis_camera_{camera_id}.png")
 
 
 def plot_3d_splines(triangulated_points, correspondences, main_camera_id, secondary_camera_id, output_dir="plots"):
