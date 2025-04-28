@@ -171,6 +171,7 @@ def load_dataframe(cameras, dataset_no):
 
         plt.savefig(f'plots/detections_camera_{i}.png')
         plt.clf()
+        plt.close()
 
         # After processing all detections, compute forward velocity
         for j in range(len(data['frame_id']) - 1):
