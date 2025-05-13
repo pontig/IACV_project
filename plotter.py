@@ -93,8 +93,8 @@ def plot_triangulated_points(triangulated_points, main_camera, secondary_camera,
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_title('Triangulated Points')
-    plt.savefig(f"{output_dir}/triangulated_points_{main_camera}_{secondary_camera}.png", dpi=300)
+    ax.set_title(f"Triangulated Points for Cameras {main_camera}-{secondary_camera}")
+    plt.savefig(f"{output_dir}/triangulated_points_{main_camera}_{secondary_camera}.png")
 
 def plot_reprojection_analysis(
     points_3d, original_points_2d, 
@@ -133,6 +133,8 @@ def plot_3d_splines(triangulated_points, correspondences, main_camera_id, second
     this_spline = []
 
     for i, current_corr in enumerate(correspondences[:-1]):
+        if i >= len(triangulated_points):
+            break
         next_corr = correspondences[i + 1]
         this_spline.append(triangulated_points[i])
 
@@ -154,7 +156,7 @@ def plot_3d_splines(triangulated_points, correspondences, main_camera_id, second
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_title('3D Splines of Triangulated Points')
+    ax.set_title(f"3D Splines for Cameras {main_camera_id}-{secondary_camera_id}")
     plt.savefig(f"{output_dir}/3d_splines_{main_camera_id}_{secondary_camera_id}.png", dpi=300)
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)

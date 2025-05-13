@@ -12,6 +12,8 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 from scipy.interpolate import make_interp_spline
 
+# import matplotlib
+# matplotlib.use('Agg')
 
 from data_loader import load_dataframe
 from global_fn import *
@@ -95,7 +97,7 @@ def evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera
     )
 
     inlier_ratio = np.sum(mask) / len(mask) if mask is not None else 0
-    logging.info(f"Cameras {main_camera}-{secondary_camera}, beta: {b:.3f}, inliers: {inlier_ratio:.4f}, correspondences: {len(correspondences)}")
+    # logging.info(f"Cameras {main_camera}-{secondary_camera}, beta: {b:.3f}, inliers: {inlier_ratio:.4f}, correspondences: {len(correspondences)}")
     
     if inliers_list is not None:
         inliers_list.append(inlier_ratio)
@@ -396,8 +398,10 @@ if __name__ == "__main__":
     df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
     
     if not os.path.exists(f"beta_results_dataset{DATASET_NO}.csv"):
-        first_beta_search(DATASET_NO, beta_shift=4000)
-        
+        logging.info("Beta results file not found, starting beta search")
+        first_beta_search(DATASET_NO, beta_shift=2000)
+      
+    logging.info("Loading beta results")  
     betas_df = pd.read_csv(f"beta_results_dataset{DATASET_NO}.csv")
     betas_df = betas_df.sort_values(by='inlier_ratio', ascending=False)
     
@@ -483,11 +487,7 @@ if __name__ == "__main__":
         splines_3d.append((spline_x, spline_y, spline_z, ts)) 
     
     plot_triangulated_points(triangulated_points, main_camera, secondary_camera)
-    plot_reprojection_analysis(
-        triangulated_points, np.array([x for x, _, _ in correspondences]),
-        np.zeros((3, 1)), np.zeros((3, 1)),
-        camera_info[int(main_camera)], int(main_camera)
-    )
+
     plot_reprojection_analysis(
         triangulated_points, np.array([y for _, y, _ in correspondences]),
         R, t,
@@ -503,16 +503,15 @@ if __name__ == "__main__":
     second_best_main_camera = betas_df.iloc[1]['main_camera']
     third_camera = betas_df.iloc[1]['secondary_camera']
     
-    print(f"Second best beta: {second_best_beta}, main camera: {second_best_main_camera}, secondary camera: {third_camera}")
+    logging.info(f"Second best beta: {second_best_beta}, main camera: {second_best_main_camera}, secondary camera: {third_camera}")
     
     # Load the frames for the second best beta
     frames = df[df['cam_id'] == int(third_camera)][['frame_id', 'detection_x', 'detection_y']].values
     frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
     frames = np.array(frames)
     frames_ids = frames[:, 0]
-    global_ts = compute_global_time(frames_ids, camera_info[int(second_best_main_camera)].fps/camera_info[int(third_camera)].fps, second_best_beta)
+    global_ts = compute_global_time(frames_ids, camera_info[int(main_camera)].fps/camera_info[int(third_camera)].fps, second_best_beta)
     frames = np.column_stack((global_ts, frames[:, 1], frames[:, 2]))
-    
     
     correspondences_2 = [] # List of (spline_x1, spline_y1, spline_z1), (x2, y2), global_ts
     for frame in frames:
@@ -537,7 +536,7 @@ if __name__ == "__main__":
         np.array([y for _, y, _ in correspondences_2], dtype=np.float32),
         camera_info[int(third_camera)].K_matrix,
         camera_info[int(third_camera)].distCoeff,
-        flags=cv.SOLVEPNP_ITERATIVE
+        confidence=.999
     )
     
     camera_poses.append({
@@ -545,6 +544,50 @@ if __name__ == "__main__":
         "R": cv.Rodrigues(rvec)[0],
         "t": tvec,
     })
+    
+    frames = np.column_stack((frames_ids, frames[:, 1], frames[:, 2]))
+    F, mask, correspondences = evaluate_beta(second_best_beta, frames, splines, camera_info, int(main_camera), int(third_camera), return_f=True)
+    
+    P1 = camera_info[int(main_camera)].K_matrix @ np.hstack((np.eye(3), np.zeros((3, 1))))
+    P3 = camera_info[int(third_camera)].K_matrix @ np.hstack((cv.Rodrigues(rvec)[0], tvec))
+    
+    points_3d_third = cv.triangulatePoints(P1, P3,
+        np.array([x for x, _, _ in correspondences], dtype=np.float32).T,
+        np.array([y for _, y, _ in correspondences], dtype=np.float32).T
+    )
+    
+    points_3d_third /= points_3d_third[3]
+    points_3d_third = points_3d_third[:3]
+    points_3d_third = points_3d_third.T
+    
+    plot_triangulated_points(points_3d_third, main_camera, third_camera)
+    
+    # Plot points_3d_third in red and triangulated_points in blue
+    fig = plt.figure(figsize=(15, 10))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot triangulated_points in blue
+    ax.scatter(
+        triangulated_points[:, 0], 
+        triangulated_points[:, 1], 
+        triangulated_points[:, 2], 
+        c='blue', s=1, label='Triangulated Points'
+    )
+
+    # Plot points_3d_third in red
+    ax.scatter(
+        points_3d_third[:, 0], 
+        points_3d_third[:, 1], 
+        points_3d_third[:, 2], 
+        c='red', s=1, label='Points 3D Third'
+    )
+
+    # Set plot labels and title
+    ax.set_title("3D Points Visualization")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.legend()
     
     # plot splines
     fig = plt.figure(figsize=(15, 10))
@@ -572,6 +615,12 @@ if __name__ == "__main__":
         triangulated_points, np.array([x for _, x, _ in correspondences_2]),
         rvec, tvec,
         camera_info[int(third_camera)], int(third_camera)
+    )
+    
+    plot_reprojection_analysis(
+        triangulated_points, np.array([x for x, _, _ in correspondences]),
+        np.zeros((3, 1)), np.zeros((3, 1)),
+        camera_info[int(main_camera)], int(main_camera)
     )
     
     # Plot camera poses with arrows along the z-direction and highlight the xy-plane
