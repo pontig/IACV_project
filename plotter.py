@@ -98,7 +98,7 @@ def plot_triangulated_points(triangulated_points, main_camera, secondary_camera,
 
 def plot_reprojection_analysis(
     points_3d, original_points_2d, 
-    R, t, camera_info, camera_id, output_dir="plots"
+    R, t, camera_info, camera_id, output_dir="plots", title=None
 ):
     """Plot reprojected 2D points for a single camera."""
     # Reproject points
@@ -110,6 +110,8 @@ def plot_reprojection_analysis(
 
     plt.figure(figsize=(19, 10))
     plt.title(f"Reprojection Analysis for Camera {camera_id}")
+    if title:
+        plt.title(title)
 
     # Plot reprojected points
     plt.scatter(reprojected_points[:, 0], -reprojected_points[:, 1], c='r', label='Reprojected Points', s=1)
