@@ -382,7 +382,64 @@ def to_normalized_camera_coord(pts, K, distcoeff):
     
     return pts_normalized
   
+def generate_3d_splines(points_3d_with_timestamps, already_existing_splines):
+    """
+    Generate 3D splines from 3D points with timestamps.
+    
+    Parameters:
+    -----------
+    points_3d_with_timestamps : list
+        List of 3D points with timestamps
+    already_existing_splines : list
+        List of existing splines
+    
+    Returns:
+    --------
+    list
+        List of generated splines
+    """
+    splines_3d_points = []
+    this_spline = []
 
+    for i, current_point in enumerate(points_3d_with_timestamps[:-1]):
+        next_point = points_3d_with_timestamps[i + 1]
+        this_spline.append(points_3d_with_timestamps[i])
+
+        # Check if the time difference exceeds the threshold
+        if next_point[3] - current_point[3] >= 5:
+            splines_3d_points.append(this_spline)
+            this_spline = []
+
+    # Append the last triangulated point to the current spline
+    this_spline.append(points_3d_with_timestamps[-1])
+    splines_3d_points.append(this_spline)
+
+    # Filter out any empty splines or splines with less than 4 points
+    splines_3d_points = [spline for spline in splines_3d_points if spline and len(spline) >= 4]
+    
+    # Generate 3D splines
+    splines_3d = []
+    for spline_points in splines_3d_points:
+        spline_points = np.array(spline_points)
+        ts = spline_points[:, 3]  # Use timestamps from triangulated points
+        
+        if len(ts) < 4:
+            continue  # Skip if not enough points for spline fitting
+
+        spline_x = make_interp_spline(ts, spline_points[:, 0], k=3)
+        spline_y = make_interp_spline(ts, spline_points[:, 1], k=3)
+        spline_z = make_interp_spline(ts, spline_points[:, 2], k=3)
+        
+        splines_3d.append((spline_x, spline_y, spline_z, ts))
+        
+    # Append the new splines to the existing ones only if the timestamps are not overlapping with any existing spline
+    for new_spline in splines_3d:
+        new_ts = new_spline[3]
+        if not any(np.any(np.isin(new_ts, existing_spline[3])) for existing_spline in already_existing_splines):
+            already_existing_splines.append(new_spline)
+    return already_existing_splines
+        
+  
 if __name__ == "__main__":
     
     
@@ -441,6 +498,8 @@ if __name__ == "__main__":
     triangulated_points_first_step = triangulated_points_first_step[:3]
     triangulated_points_first_step = triangulated_points_first_step.T
     
+    triangulated_points_first_step_with_timestamps = np.column_stack((triangulated_points_first_step, np.array([x[2] for x in correspondences])))
+    
     # # Reproject 3D points onto both cameras
     # logging.info("Reprojecting 3D points onto both cameras")
 
@@ -459,41 +518,8 @@ if __name__ == "__main__":
     # secondary_reprojected_points = secondary_reprojected_points.reshape(-1, 2)
     
     # Compute first 3D splines
-    splines_3d_points = []
-    this_spline = []
-
-    for i, current_corr in enumerate(correspondences[:-1]):
-        next_corr = correspondences[i + 1]
-        this_spline.append(triangulated_points_first_step[i])
-
-        # Check if the time difference exceeds the threshold
-        if next_corr[2] - current_corr[2] >= 5:
-            splines_3d_points.append(this_spline)
-            this_spline = []
-
-    # Append the last triangulated point to the current spline
-    this_spline.append(triangulated_points_first_step[-1])
-    splines_3d_points.append(this_spline)
-
-    # Filter out any empty splines or splines with less than 4 points
-    splines_3d_points = [spline for spline in splines_3d_points if spline and len(spline) >= 4]
-    
-    # Generate 3D splines
-    splines_3d = []
-    for spline_points in splines_3d_points:
-        spline_points = np.array(spline_points)
-        ts = np.array([correspondences[i][2] for i in range(len(correspondences)) if triangulated_points_first_step[i] in spline_points])
+    splines_3d = generate_3d_splines(triangulated_points_first_step_with_timestamps, [])
         
-        if len(ts) < 4:
-            continue  # Skip if not enough points for spline fitting
-
-        spline_x = make_interp_spline(ts, spline_points[:, 0], k=3)
-        spline_y = make_interp_spline(ts, spline_points[:, 1], k=3)
-        spline_z = make_interp_spline(ts, spline_points[:, 2], k=3)
-        
-        splines_3d.append((spline_x, spline_y, spline_z, ts)) 
-    
-    
     # plot_triangulated_points(triangulated_points, main_camera, secondary_camera)
 
     # plot_reprojection_analysis(
@@ -633,7 +659,8 @@ if __name__ == "__main__":
     ax.set_zlabel("Z")
     ax.legend()
     
-    # TODO: add the new splines to the existing splines (not the points that extend)
+    splines_3d = generate_3d_splines(tpns_to_add_to_3d_with_timestamps, splines_3d)
+    
     # Convert splines to mutable structure
     spline_dicts = [{
         'spline_x': spline_x,
