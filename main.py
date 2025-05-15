@@ -453,6 +453,7 @@ if __name__ == "__main__":
         cameras = f.read().strip().split()    
     cameras = cameras[2::3]
     logging.info(f"Loaded {len(cameras)} cameras")
+    camera_poses = [{"cam_id": i, "R": None, "t": None} for i in range(len(cameras))]
     
     # Load dataframe and splines
     logging.info("Loading dataframe and splines")
@@ -483,16 +484,16 @@ if __name__ == "__main__":
     
     _, R, t, mask, triangulated_points_first_step = cv.recoverPose(E, main_pts_normalized, secondary_pts_normalized, cameraMatrix=np.eye(3), distanceThresh=100)
     
-    camera_poses.append({
+    camera_poses[int(main_camera)] = {
         "cam_id": int(main_camera),
         "R": np.eye(3),
         "t": np.zeros((3, 1)),
-    })
-    camera_poses.append({
+    }
+    camera_poses[int(secondary_camera)] = {
         "cam_id": int(secondary_camera),
         "R": R,
         "t": t,
-    })            
+    }
     
     triangulated_points_first_step /= triangulated_points_first_step[3]
     triangulated_points_first_step = triangulated_points_first_step[:3]
@@ -576,29 +577,12 @@ if __name__ == "__main__":
         confidence=.999
     )
     
-    # ret = bundle_adjust_camera_pose(
-    #     splines_3d,
-    #     frames,
-    #     camera_info[int(third_camera)].K_matrix,
-    #     camera_info[int(third_camera)].distCoeff,
-    #     rvec,
-    #     tvec
-    # )
-    # # plot_reprojection_analysis(
-    # #     triangulated_points_first_step, np.array([x for _, x, _ in correspondences_2]),
-    # #     rvec, tvec,
-    # #     camera_info[int(third_camera)], int(third_camera),
-    # #     title=f"Reprojection Analysis for Camera {third_camera} with Beta {second_best_beta}"
-    # # )
     
-    # rvec = ret['rvec']
-    # tvec = ret['tvec']
-    
-    camera_poses.append({
+    camera_poses[int(third_camera)] = {
         "cam_id": int(third_camera),
         "R": cv.Rodrigues(rvec)[0],
         "t": tvec,
-    })
+    }
     
     # ============== Step 2.2: Extend 3D splines with new camera detections ==============
     
@@ -758,6 +742,34 @@ if __name__ == "__main__":
                 break
     # Convert back to original format
     splines_3d = [(s['spline_x'], s['spline_y'], s['spline_z'], s['ts']) for s in spline_dicts]
+    
+    for i in [int(main_camera), int(secondary_camera), int(third_camera)]:
+        frames = df[df['cam_id'] == i][['frame_id', 'detection_x', 'detection_y']].values
+        frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
+        frames = np.array(frames)
+        frames_ids = frames[:, 0]
+        bbbb = 0 if i == int(main_camera) else second_best_beta if i == int(third_camera) else best_beta
+        global_ts = compute_global_time(frames_ids, camera_info[int(main_camera)].fps/camera_info[i].fps, bbbb)
+        frames = np.column_stack((global_ts, frames[:, 1], frames[:, 2]))
+
+        ret = bundle_adjust_camera_pose(
+            splines_3d,
+            frames,
+            camera_info[i].K_matrix,
+            camera_info[i].distCoeff,
+            cv.Rodrigues(camera_poses[i]["R"])[0],
+            camera_poses[i]["t"]
+        )
+        
+        camera_poses[i]["R"] = ret['R']
+        camera_poses[i]["t"] = ret['tvec']
+        
+        plot_reprojection_analysis(
+            splines_3d, frames[:, 1:],
+            cv.Rodrigues(camera_poses[i]["R"])[0], camera_poses[i]["t"],
+            camera_info[i], i,
+            title=f"Refined Reprojection Analysis for Camera {i} with Beta {bbbb}"
+        )
 
     
     # plot splines
@@ -767,6 +779,8 @@ if __name__ == "__main__":
         spline_x, spline_y, spline_z, ts = spline
         ax.plot(spline_x(ts), spline_y(ts), spline_z(ts))
     for camera_pose in camera_poses:
+        if camera_pose["R"] is None:
+            continue
         cam_id = camera_pose["cam_id"]
         R = camera_pose["R"]
         t = camera_pose["t"].flatten()
@@ -777,21 +791,23 @@ if __name__ == "__main__":
     ax.set_zlabel("Z")
     ax.legend()
     
-    # fig = plt.figure(figsize=(15, 10))
-    # ax = fig.add_subplot(111, projection='3d')
-    # for spline in splines_3d:
-    #     spline_x, spline_y, spline_z, ts = spline
-    #     ax.plot(spline_x(ts), spline_y(ts), spline_z(ts))
-    # for camera_pose in camera_poses:
-    #     cam_id = camera_pose["cam_id"]
-    #     R = camera_pose["R"]
-    #     t = camera_pose["t"].flatten()
-    #     ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=30)
-    # ax.set_title(f"3D Splines")
-    # ax.set_xlabel("X")
-    # ax.set_ylabel("Y")
-    # ax.set_zlabel("Z")
-    # ax.legend()
+    fig = plt.figure(figsize=(15, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    for spline in splines_3d:
+        spline_x, spline_y, spline_z, ts = spline
+        ax.plot(spline_x(ts), spline_y(ts), spline_z(ts))
+    for camera_pose in camera_poses:
+        if camera_pose["R"] is None:
+            continue
+        cam_id = camera_pose["cam_id"]
+        R = camera_pose["R"]
+        t = camera_pose["t"].flatten()
+        ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=30)
+    ax.set_title(f"3D Splines")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.legend()
         
     # print(f"Rotation vector: {rvec}")
     # print(f"Translation vector: {tvec}")
@@ -799,50 +815,52 @@ if __name__ == "__main__":
     # print(f"Number of inliers: {len(inliers)}")
     
     # plot_reprojection_analysis(
-    #     triangulated_points_first_step, np.array([x for _, x, _ in correspondences_2]),
-    #     rvec, tvec,
+    #     splines_3d, df[df['cam_id'] == int(third_camera)][['detection_x', 'detection_y']].values,
+    #     cv.Rodrigues(camera_poses[int(third_camera)]["R"])[0], camera_poses[int(third_camera)]["t"],
     #     camera_info[int(third_camera)], int(third_camera),
     #     title=f"Refined Reprojection Analysis for Camera {third_camera} with Beta {second_best_beta}"
     # )
     
     # plot_reprojection_analysis(
-    #     triangulated_points_first_step, np.array([x for x, _, _ in correspondences]),
-    #     np.zeros((3, 1)), np.zeros((3, 1)),
+    #     splines_3d, df[df['cam_id'] == int(main_camera)][['detection_x', 'detection_y']].values,
+    #     cv.Rodrigues(camera_poses[int(main_camera)]["R"])[0], camera_poses[int(main_camera)]["t"],
     #     camera_info[int(main_camera)], int(main_camera)
     # )
     
-    # # Plot camera poses with arrows along the z-direction and highlight the xy-plane
-    # fig = plt.figure(figsize=(15, 10))
-    # ax = fig.add_subplot(111, projection='3d')
+    # Plot camera poses with arrows along the z-direction and highlight the xy-plane
+    fig = plt.figure(figsize=(15, 10))
+    ax = fig.add_subplot(111, projection='3d')
 
-    # # Plot the xy-plane
-    # plane_size = 10
-    # xx, yy = np.meshgrid(np.linspace(-plane_size, plane_size, 10), np.linspace(-plane_size, plane_size, 10))
-    # zz = np.zeros_like(xx)
-    # ax.plot_surface(xx, yy, zz, alpha=0.2, color='gray')
+    # Plot the xy-plane
+    plane_size = 10
+    xx, yy = np.meshgrid(np.linspace(-plane_size, plane_size, 10), np.linspace(-plane_size, plane_size, 10))
+    zz = np.zeros_like(xx)
+    ax.plot_surface(xx, yy, zz, alpha=0.2, color='gray')
 
-    # # Plot camera poses
-    # for pose in camera_poses:
-    #     cam_id = pose["cam_id"]
-    #     R = pose["R"]
-    #     t = pose["t"].flatten()
+    # Plot camera poses
+    for pose in camera_poses:
+        if pose["R"] is None:
+            continue
+        cam_id = pose["cam_id"]
+        R = pose["R"]
+        t = pose["t"].flatten()
+        
+        # Plot camera position
+        ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=100)
 
-    #     # Plot camera position
-    #     ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=100)
+        # Plot arrow along the z-direction
+        z_dir = R @ np.array([0, 0, 1])  # Transform z-direction
+        ax.quiver(
+            t[0], t[1], t[2], 
+            z_dir[0], z_dir[1], z_dir[2], 
+            length=1.0, color='blue', linewidth=2
+        )
 
-    #     # Plot arrow along the z-direction
-    #     z_dir = R @ np.array([0, 0, 1])  # Transform z-direction
-    #     ax.quiver(
-    #         t[0], t[1], t[2], 
-    #         z_dir[0], z_dir[1], z_dir[2], 
-    #         length=1.0, color='blue', linewidth=2
-    #     )
-
-    # # Set plot labels and title
-    # ax.set_title("Camera Poses with Z-Direction Arrows")
-    # ax.set_xlabel("X")
-    # ax.set_ylabel("Y")
-    # ax.set_zlabel("Z")
-    # ax.legend()
+    # Set plot labels and title
+    ax.set_title("Camera Poses with Z-Direction Arrows")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.legend()
     
     plt.show()

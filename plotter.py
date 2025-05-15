@@ -97,11 +97,22 @@ def plot_triangulated_points(triangulated_points, main_camera, secondary_camera,
     plt.savefig(f"{output_dir}/triangulated_points_{main_camera}_{secondary_camera}.png")
 
 def plot_reprojection_analysis(
-    points_3d, original_points_2d, 
+    splines_3d, original_points_2d, 
     R, t, camera_info, camera_id, output_dir="plots", title=None
 ):
     """Plot reprojected 2D points for a single camera."""
     # Reproject points
+    
+    points_3d = []
+    
+    for spline in splines_3d:
+        spline_x, spline_y, spline_z, tss = spline
+        timestamps_linspace = tss
+        for tt in timestamps_linspace:
+            points_3d.append([spline_x(tt), spline_y(tt), spline_z(tt)])
+    points_3d = np.array(points_3d)
+    points_3d = points_3d.reshape(-1, 3)
+    
     reprojected_points, _ = cv.projectPoints(
         points_3d, R, t,
         camera_info.K_matrix, camera_info.distCoeff

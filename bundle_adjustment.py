@@ -122,13 +122,13 @@ def bundle_adjust_camera_pose(splines_3d, camera_detections, camera_K, camera_di
     mean_reprojection_error = np.sqrt(np.mean(residuals_squared))
     
     # Count inliers (points with reprojection error below threshold)
-    inlier_threshold = 5.0  # pixels
+    inlier_threshold = 12.0  # pixels
     inliers = np.sum(np.sqrt(residuals_squared) < inlier_threshold)
     
     print(f"Bundle adjustment completed:")
-    print(f"  Initial rotation vector: {initial_rvec}")
+    print(f"  Initial rotation vector: {initial_rvec.flatten()}")
     print(f"  Optimized rotation vector: {optimized_rvec}")
-    print(f"  Initial translation vector: {initial_tvec}")
+    print(f"  Initial translation vector: {initial_tvec.flatten()}")
     print(f"  Optimized translation vector: {optimized_tvec}")
     print(f"  Mean reprojection error: {mean_reprojection_error:.4f} pixels")
     print(f"  Inliers: {inliers}/{len(correspondences)} ({inliers/len(correspondences)*100:.2f}%)")
