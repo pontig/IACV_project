@@ -106,7 +106,7 @@ def bundle_adjust_camera_pose(splines_3d, camera_detections, camera_K, camera_di
         method='lm',
         ftol=1e-8,
         xtol=1e-8,
-        verbose=2
+        verbose=0
     )
     
     # Extract optimized parameters
@@ -125,13 +125,13 @@ def bundle_adjust_camera_pose(splines_3d, camera_detections, camera_K, camera_di
     inlier_threshold = 12.0  # pixels
     inliers = np.sum(np.sqrt(residuals_squared) < inlier_threshold)
     
-    print(f"Bundle adjustment completed:")
-    print(f"  Initial rotation vector: {initial_rvec.flatten()}")
-    print(f"  Optimized rotation vector: {optimized_rvec}")
-    print(f"  Initial translation vector: {initial_tvec.flatten()}")
-    print(f"  Optimized translation vector: {optimized_tvec}")
-    print(f"  Mean reprojection error: {mean_reprojection_error:.4f} pixels")
-    print(f"  Inliers: {inliers}/{len(correspondences)} ({inliers/len(correspondences)*100:.2f}%)")
+    # print(f"Bundle adjustment completed:")
+    # print(f"  Initial rotation vector: {initial_rvec.flatten()}")
+    # print(f"  Optimized rotation vector: {optimized_rvec}")
+    # print(f"  Initial translation vector: {initial_tvec.flatten()}")
+    # print(f"  Optimized translation vector: {optimized_tvec}")
+    # print(f"  Mean reprojection error: {mean_reprojection_error:.4f} pixels")
+    # print(f"  Inliers: {inliers}/{len(correspondences)} ({inliers/len(correspondences)*100:.2f}%)")
     
     return {
         'rvec': optimized_rvec,
@@ -294,7 +294,7 @@ def iterative_bundle_adjustment(splines_3d, camera_detections, camera_K, camera_
             method='lm',
             ftol=1e-8,
             xtol=1e-8,
-            verbose=1
+            verbose=0
         )
         
         current_rvec = result.x[0:3]

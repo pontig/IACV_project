@@ -457,7 +457,7 @@ if __name__ == "__main__":
         cameras = f.read().strip().split()    
     cameras = cameras[2::3]
     logging.info(f"Loaded {len(cameras)} cameras")
-    camera_poses = [{"cam_id": i, "R": None, "t": None, "b": None} for i in range(len(cameras))]
+    camera_poses = [{"cam_id": i, "R": None, "t": None, 'b': None} for i in range(len(cameras))]
     
     # Load dataframe and splines
     logging.info("Loading dataframe and splines")
@@ -470,7 +470,8 @@ if __name__ == "__main__":
     logging.info("Loading beta results")  
     betas_df = pd.read_csv(f"beta_results_dataset{DATASET_NO}.csv")
     betas_df = betas_df.sort_values(by='inlier_ratio', ascending=False)
-    
+    # Create a 2D array with all betas from betas_df
+    beta_array = betas_df.pivot(index='secondary_camera', columns='main_camera', values='beta').fillna(0).to_numpy() # [sec][prim]
     
     # ============== Step 1: Generate first 3D point and splines with best beta ==============
     
@@ -479,6 +480,11 @@ if __name__ == "__main__":
     secondary_camera = betas_df.iloc[0]['secondary_camera']
     frames = df[df['cam_id'] == int(secondary_camera)][['frame_id', 'detection_x', 'detection_y']].values
     frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
+    
+    first_main_camera = main_camera
+    first_beta = best_beta
+    
+    logging.info(f"Best beta: {best_beta}, main camera: {main_camera}, secondary camera: {secondary_camera}, inliers: {betas_df.iloc[0]['inlier_ratio']:.4f}")
     
     F, mask, correspondences = evaluate_beta(best_beta, frames, splines, camera_info, int(main_camera), int(secondary_camera), return_f=True)
     E = camera_info[int(main_camera)].K_matrix.T @ F @ camera_info[int(secondary_camera)].K_matrix
@@ -492,13 +498,11 @@ if __name__ == "__main__":
         "cam_id": int(main_camera),
         "R": np.eye(3),
         "t": np.zeros((3, 1)),
-        "b": 0
     }
     camera_poses[int(secondary_camera)] = {
         "cam_id": int(secondary_camera),
         "R": R,
         "t": t,
-        "b": best_beta
     }
     
     triangulated_points_first_step /= triangulated_points_first_step[3]
@@ -538,18 +542,67 @@ if __name__ == "__main__":
 
 
     # ============== Step 2.1: Add cameras in decreasing order of inlier ratio ==============
-    num_cameras_processed = 2
+    cameras_processed = [int(main_camera), int(secondary_camera)]
+    main_camera_index = 0
+    old_main_camera = int(main_camera)
+    stop = False
     
-    while num_cameras_processed < len(cameras):    
-        # Take the second-best beta value that has current main camera as main camera
-        betas_df = betas_df[betas_df['main_camera'] == int(main_camera)]
-        betas_df = betas_df.sort_values(by='inlier_ratio', ascending=False)
-        nth_best_beta = betas_df.iloc[num_cameras_processed - 1]['beta']
-        second_best_main_camera = betas_df.iloc[num_cameras_processed - 1]['main_camera']
-        new_camera = betas_df.iloc[num_cameras_processed - 1]['secondary_camera']
-        inlier_ratio = betas_df.iloc[num_cameras_processed - 1]['inlier_ratio']
+    while len(cameras_processed) < len(cameras):
         
-        logging.info(f"{num_cameras_processed}-th best beta: {nth_best_beta}, main camera: {second_best_main_camera}, secondary camera: {new_camera}, inliers: {inlier_ratio:.4f}")
+        next_in_line = 0
+        while True:
+            # Filter betas_df for pairs where the main camera is in cameras_processed and the secondary camera is not
+            betas_here_df = betas_df[
+                (betas_df['main_camera'].isin(cameras_processed)) & 
+                (~betas_df['secondary_camera'].isin(cameras_processed))
+            ]
+            betas_here_df = betas_here_df.sort_values(by='inlier_ratio', ascending=False)
+            
+            # print(betas_here_df)
+            
+            if betas_here_df.empty:
+                logging.warning("No valid camera pairs found with the current conditions.")
+                break
+            
+            # Select the next best pair
+            new_camera = betas_here_df.iloc[next_in_line]['secondary_camera']
+            nth_best_beta = betas_here_df.iloc[next_in_line]['beta']
+            inlier_ratio = betas_here_df.iloc[next_in_line]['inlier_ratio']
+            main_camera = betas_here_df.iloc[next_in_line]['main_camera']
+            next_in_line += 1
+            
+            if inlier_ratio < 0.5:
+                logging.warning(f"Low inlier ratio for primary camera {main_camera} and secondary camera {new_camera}: {inlier_ratio:.4f}")
+                if next_in_line >= len(betas_here_df):
+                    logging.warning(f"Unable to find a valid camera pair with sufficient inlier ratio. skipping camera")
+                    stop = True
+                    break
+                continue
+            
+            if new_camera not in cameras_processed:
+                if main_camera != old_main_camera:
+                    logging.info(f"Switching main camera from {old_main_camera} to {main_camera}, adjusting 3d splines timestamps...")
+                    beta_main_old_main_camera = betas_df[(betas_df['main_camera'] == main_camera) & (betas_df['secondary_camera'] == old_main_camera)]['beta'].values[0]
+                    new_splines_3d = []
+                    for spline_x, spline_y, spline_z, tss in splines_3d:
+                        # Adjust timestamps for the new main camera
+                        old_tss = tss.copy()
+                        new_tss = compute_global_time(old_tss, camera_info[int(main_camera)].fps/camera_info[int(old_main_camera)].fps, beta_main_old_main_camera) # TODO: maybe here
+                        tss[:] = new_tss
+                        spline_x = make_interp_spline(tss, spline_x(old_tss), k=3)
+                        spline_y = make_interp_spline(tss, spline_y(old_tss), k=3)
+                        spline_z = make_interp_spline(tss, spline_z(old_tss), k=3)
+                        new_splines_3d.append((spline_x, spline_y, spline_z, tss))
+                        
+                    splines_3d = new_splines_3d  
+                    old_main_camera = main_camera
+                                        
+                break
+            
+        if stop:
+            break
+            
+        logging.info(f"{len(cameras_processed)}-th best beta: {nth_best_beta}, main camera: {main_camera}, secondary camera: {new_camera}, inliers: {inlier_ratio:.4f}")
         
         # Load the frames for the second best beta
         frames = df[df['cam_id'] == int(new_camera)][['frame_id', 'detection_x', 'detection_y']].values
@@ -590,7 +643,6 @@ if __name__ == "__main__":
             "cam_id": int(new_camera),
             "R": cv.Rodrigues(rvec)[0],
             "t": tvec,
-            "b": nth_best_beta
         }
         
         # ============== Step 2.2: Extend 3D splines with new camera detections ==============
@@ -633,7 +685,7 @@ if __name__ == "__main__":
             tpns_to_add_to_3d[:, 0], 
             tpns_to_add_to_3d[:, 1], 
             tpns_to_add_to_3d[:, 2], 
-            c='blue', s=1, label=f"Triangulated Points {num_cameras_processed}th step"
+            c='blue', s=1, label=f"Triangulated Points {len(cameras_processed)}th step"
         )
 
         # Plot splines in red
@@ -753,14 +805,14 @@ if __name__ == "__main__":
         splines_3d = [(s['spline_x'], s['spline_y'], s['spline_z'], s['ts']) for s in spline_dicts]
         
         for camera_pose in camera_poses:
-            if camera_pose["R"] is None:
+            if camera_pose["R"] is None or camera_pose["cam_id"] != int(new_camera):
                 continue
             i = camera_pose["cam_id"]
             frames = df[df['cam_id'] == i][['frame_id', 'detection_x', 'detection_y']].values
             frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
             frames = np.array(frames)
             frames_ids = frames[:, 0]
-            bbbb = camera_poses[i]["b"]
+            bbbb = beta_array[int(i)][int(main_camera)]
             global_ts = compute_global_time(frames_ids, camera_info[int(main_camera)].fps/camera_info[i].fps, bbbb)
             frames = np.column_stack((global_ts, frames[:, 1], frames[:, 2]))
 
@@ -777,8 +829,6 @@ if __name__ == "__main__":
             camera_poses[i]["t"] = ret['tvec']
             
             
-
-        
         # plot splines
         fig = plt.figure(figsize=(15, 10))
         ax = fig.add_subplot(111, projection='3d')
@@ -798,23 +848,6 @@ if __name__ == "__main__":
         ax.set_zlabel("Z")
         # ax.legend()
         
-        fig = plt.figure(figsize=(15, 10))
-        ax = fig.add_subplot(111, projection='3d')
-        for spline in splines_3d:
-            spline_x, spline_y, spline_z, ts = spline
-            ax.plot(spline_x(ts), spline_y(ts), spline_z(ts))
-        for camera_pose in camera_poses:
-            if camera_pose["R"] is None:
-                continue
-            cam_id = camera_pose["cam_id"]
-            R = camera_pose["R"]
-            t = camera_pose["t"].flatten()
-            ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=30)
-        ax.set_title(f"3D Splines")
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
-        ax.legend()
             
         # print(f"Rotation vector: {rvec}")
         # print(f"Translation vector: {tvec}")
@@ -834,44 +867,41 @@ if __name__ == "__main__":
         #     camera_info[int(main_camera)], int(main_camera)
         # )
         
-        # Plot camera poses with arrows along the z-direction and highlight the xy-plane
-        fig = plt.figure(figsize=(15, 10))
-        ax = fig.add_subplot(111, projection='3d')
+        # # Plot camera poses with arrows along the z-direction and highlight the xy-plane
+        # fig = plt.figure(figsize=(15, 10))
+        # ax = fig.add_subplot(111, projection='3d')
 
-        # Plot the xy-plane
-        plane_size = 10
-        xx, yy = np.meshgrid(np.linspace(-plane_size, plane_size, 10), np.linspace(-plane_size, plane_size, 10))
-        zz = np.zeros_like(xx)
-        ax.plot_surface(xx, yy, zz, alpha=0.2, color='gray')
-
-        # Plot camera poses
-        for pose in camera_poses:
-            if pose["R"] is None:
-                continue
-            cam_id = pose["cam_id"]
-            R = pose["R"]
-            t = pose["t"].flatten()
+        # # Plot camera poses
+        # for pose in camera_poses:
+        #     if pose["R"] is None:
+        #         continue
+        #     cam_id = pose["cam_id"]
+        #     R = pose["R"]
+        #     t = pose["t"].flatten()
             
-            # Plot camera position
-            ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=100)
+        #     # Plot camera position
+        #     ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=100)
 
-            # Plot arrow along the z-direction
-            z_dir = R @ np.array([0, 0, 1])  # Transform z-direction
-            ax.quiver(
-                t[0], t[1], t[2], 
-                z_dir[0], z_dir[1], z_dir[2], 
-                length=1.0, color='blue', linewidth=2
-            )
+        #     # Plot arrow along the z-direction
+        #     z_dir = R @ np.array([0, 0, 1])  # Transform z-direction
+        #     ax.quiver(
+        #         t[0], t[1], t[2], 
+        #         z_dir[0], z_dir[1], z_dir[2], 
+        #         length=1.0, color='blue', linewidth=2
+        #     )
 
-        # Set plot labels and title
-        ax.set_title("Camera Poses with Z-Direction Arrows")
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
-        ax.legend()
+        # # Set plot labels and title
+        # ax.set_title("Camera Poses with Z-Direction Arrows")
+        # ax.set_xlabel("X")
+        # ax.set_ylabel("Y")
+        # ax.set_zlabel("Z")
+        # ax.legend()
         
-        num_cameras_processed += 1
+        cameras_processed.append(int(new_camera))
         
+    # main_camera = first_main_camera
+    # beta = first_beta
+
     for camera_pose in camera_poses:
         if camera_pose["R"] is None:
             continue
@@ -881,7 +911,31 @@ if __name__ == "__main__":
                     splines_3d, frames[:, 1:],
                     cv.Rodrigues(camera_poses[i]["R"])[0], camera_poses[i]["t"],
                     camera_info[i], i,
-                    title=f"Refined Reprojection Analysis for Camera {i} with Beta {bbbb}"
+                    title=f"Refined Reprojection Analysis for Camera {i}"
         )
+    
+    fig = plt.figure(figsize=(15, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    plane_size = 10
+    xx, yy = np.meshgrid(np.linspace(-plane_size, plane_size, 10), np.linspace(-plane_size, plane_size, 10))
+    zz = np.zeros_like(xx)
+    ax.plot_surface(xx, yy, zz, alpha=0.2, color='gray')
+        
+    for spline in splines_3d:
+        spline_x, spline_y, spline_z, ts = spline
+        ax.plot(spline_x(ts), spline_y(ts), spline_z(ts))
+    for camera_pose in camera_poses:
+        if camera_pose["R"] is None:
+            continue
+        cam_id = camera_pose["cam_id"]
+        R = camera_pose["R"]
+        t = camera_pose["t"].flatten()
+        ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=30)
+    ax.set_title(f"3D Splines with Camera Poses")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.legend()
     
     plt.show()
