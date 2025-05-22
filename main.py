@@ -40,7 +40,7 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 # Add both handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
-DATASET_NO = 4
+DATASET_NO = 1
 
 def evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_list=None, return_f=False):
     """
@@ -98,14 +98,14 @@ def evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera
     )
 
     inlier_ratio = np.sum(mask) / len(mask) if mask is not None else 0
-    # logging.info(f"Cameras {main_camera}-{secondary_camera}, beta: {b:.3f}, inliers: {inlier_ratio:.4f}, correspondences: {len(correspondences)}")
+    logging.info(f"Cameras {main_camera}-{secondary_camera}, beta: {b:.3f}, inliers: {inlier_ratio:.4f}, correspondences: {len(correspondences)}")
     
     if inliers_list is not None:
         inliers_list.append(inlier_ratio)
         
     if return_f:
         return F, mask, correspondences
-    return inlier_ratio
+    return inlier_ratio, len(correspondences)
 
 def plot_combined_results(beta_values_coarse, inliers_coarse, best_beta_coarse, max_inliers_coarse,
                           beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
@@ -151,7 +151,7 @@ def plot_combined_results(beta_values_coarse, inliers_coarse, best_beta_coarse, 
     plt.savefig(f"plots/inliers_vs_beta_combined_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png", dpi=300)
     plt.close()
 
-def search_optimal_beta(frames, splines, camera_info, main_camera, secondary_camera, dataset_no, beta_shift=4000):
+def search_optimal_beta(frames, splines, camera_info, main_camera, secondary_camera, dataset_no, beta_shift):
     """
     Perform multi-level search to find the optimal beta between two cameras
     
@@ -237,19 +237,22 @@ def search_optimal_beta(frames, splines, camera_info, main_camera, secondary_cam
     logging.info(f"Cameras {main_camera}-{secondary_camera}: Starting finest search")
     beta_finest = np.arange(best_beta_finer - 1, best_beta_finer + 1, finest_step)
     beta_values_finest = []
+    num_inliers = []
 
     for b in beta_finest:
-        evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_finest)
+        _, ni = evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_finest)
         beta_values_finest.append(b)
+        num_inliers.append(ni)
 
     best_beta_finest = beta_finest[np.argmax(inliers_finest)]
     max_inliers_finest = np.max(inliers_finest)
+    max_inliers_finest_abs_n = num_inliers[np.argmax(inliers_finest)]
     logging.info(f"Cameras {main_camera}-{secondary_camera}: End of finest search")
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Best beta (finest): {best_beta_finest}, inliers: {max_inliers_finest:.4f}")
+    logging.info(f"Cameras {main_camera}-{secondary_camera}: Best beta (finest): {best_beta_finest}, inliers: {max_inliers_finest:.4f}, that are {max_inliers_finest_abs_n} inliers")
 
     # Final result
     logging.info(f"Cameras {main_camera}-{secondary_camera}: Final Result")
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Best beta: {best_beta_finest}, inliers: {max_inliers_finest:.4f}")
+    logging.info(f"Cameras {main_camera}-{secondary_camera}: Best beta: {best_beta_finest}, inliers: {max_inliers_finest:.4f}, that are {max_inliers_finest_abs_n} inliers")
     
     # Generate plots
     plot_refinement_process(
@@ -268,7 +271,7 @@ def search_optimal_beta(frames, splines, camera_info, main_camera, secondary_cam
         main_camera, secondary_camera, dataset_no
     )
     
-    return best_beta_finest, max_inliers_finest
+    return best_beta_finest, max_inliers_finest, max_inliers_finest_abs_n
 
 def process_camera_pair(main_camera, secondary_camera, df, splines, camera_info, dataset_no, beta_shift):
     """Process a single camera pair to find optimal beta"""
@@ -286,7 +289,7 @@ def process_camera_pair(main_camera, secondary_camera, df, splines, camera_info,
         return None
         
     # Find optimal beta
-    best_beta, max_inliers = search_optimal_beta(
+    best_beta, max_inliers, max_inliers_abs = search_optimal_beta(
         frames, splines, camera_info, 
         main_camera, secondary_camera, 
         dataset_no, beta_shift
@@ -298,10 +301,11 @@ def process_camera_pair(main_camera, secondary_camera, df, splines, camera_info,
         "main_camera": main_camera,
         "secondary_camera": secondary_camera,
         "beta": best_beta,
-        "inlier_ratio": max_inliers
+        "inlier_ratio": max_inliers,
+        "inlier_count": max_inliers_abs
     }
 
-def first_beta_search(dataset_no=DATASET_NO, beta_shift=4000):
+def first_beta_search(dataset_no=DATASET_NO, beta_shift=1):
     """
     Main function to find optimal beta values for all camera combinations
     """
@@ -314,7 +318,7 @@ def first_beta_search(dataset_no=DATASET_NO, beta_shift=4000):
     # Create pairs of camera indices to process
     camera_pairs = [(m, s) for m in range(len(cameras)) for s in range(len(cameras)) if m != s]
     
-    # Use ProcessPoolExecutor instead of ThreadPoolExecutor
+    # Use ProcessPoolExecutor for parallel processing
     max_workers = min(10, os.cpu_count() or 4)  # Use min of 10 or available CPU cores
     logging.info(f"Using ProcessPoolExecutor with {max_workers} workers")
     
@@ -336,7 +340,8 @@ def first_beta_search(dataset_no=DATASET_NO, beta_shift=4000):
                         "main_camera": result["main_camera"],
                         "secondary_camera": result["secondary_camera"],
                         "beta": result["beta"],
-                        "inlier_ratio": result["inlier_ratio"]
+                        "inlier_ratio": result["inlier_ratio"],
+                        "inlier_count": result["inlier_count"]
                     }
                     logging.info(f"Completed pair {pair[0]}-{pair[1]}")
             except Exception as exc:
@@ -348,9 +353,9 @@ def first_beta_search(dataset_no=DATASET_NO, beta_shift=4000):
     # Save all results to a separate log file
     result_log_path = f"logs/beta_results_dataset{dataset_no}.csv"
     with open(result_log_path, 'w') as f:
-        f.write("main_camera,secondary_camera,beta,inlier_ratio\n")
+        f.write("main_camera,secondary_camera,beta,inlier_ratio,num_inliers\n")
         for key, value in results.items():
-            f.write(f"{value['main_camera']},{value['secondary_camera']},{value['beta']:.4f},{value['inlier_ratio']:.4f}\n")
+            f.write(f"{value['main_camera']},{value['secondary_camera']},{value['beta']:.4f},{value['inlier_ratio']:.4f},{value['inlier_count']}\n")
     
     logging.info(f"Results saved to {result_log_path}")
     logging.info(f"Total execution time: {(time.time() - start_time)/60:.2f} minutes")
@@ -443,6 +448,306 @@ def generate_3d_splines(points_3d_with_timestamps, already_existing_splines):
             already_existing_splines.append(new_spline)
     return already_existing_splines
         
+def merge_and_smooth_splines(spline_dicts, tpns_to_add_to_3d_with_timestamps, blend_window=5.0, smoothing_factor=0.1):
+    """
+    Merge splines with new points and smooth the junctions.
+    
+    Parameters:
+    -----------
+    spline_dicts : list
+        List of dictionaries containing spline components
+    tpns_to_add_to_3d_with_timestamps : ndarray
+        New 3D points with timestamps to incorporate
+    blend_window : float
+        Time window for blending/merging splines
+    smoothing_factor : float
+        Factor controlling smoothness at junctions (0-1)
+        
+    Returns:
+    --------
+    list
+        Updated list of spline dictionaries
+    """
+    # Sort new points by timestamp for efficient processing
+    tpns_sorted = sorted(tpns_to_add_to_3d_with_timestamps, key=lambda pt: pt[3])
+    extended_timestamps = set()
+    
+    # First pass: Extend existing splines with nearby points
+    for pt_x, pt_y, pt_z, pt_ts in tpns_sorted:
+        if pt_ts in extended_timestamps:
+            continue
+            
+        # Find closest spline by timestamp
+        closest_spline_idx = -1
+        min_dist = float('inf')
+        extend_direction = None  # 'forward' or 'backward'
+        
+        for i, spline in enumerate(spline_dicts):
+            ts_min, ts_max = np.min(spline['ts']), np.max(spline['ts'])
+            
+            # Check if point can extend forward
+            if 0 < pt_ts - ts_max < blend_window:
+                dist = pt_ts - ts_max
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_spline_idx = i
+                    extend_direction = 'forward'
+            
+            # Check if point can extend backward
+            elif 0 < ts_min - pt_ts < blend_window:
+                dist = ts_min - pt_ts
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_spline_idx = i
+                    extend_direction = 'backward'
+        
+        # If a spline to extend was found
+        if closest_spline_idx >= 0:
+            spline = spline_dicts[closest_spline_idx]
+            ts_min, ts_max = np.min(spline['ts']), np.max(spline['ts'])
+            
+            if extend_direction == 'forward':
+                # Create a smooth transition between the spline end and the new point
+                # Extract endpoint values and derivatives
+                end_ts = ts_max
+                end_x = float(spline['spline_x'](end_ts))
+                end_y = float(spline['spline_y'](end_ts))
+                end_z = float(spline['spline_z'](end_ts))
+                
+                # Calculate derivatives at the endpoint
+                dx_dt = float(spline['spline_x'].derivative()(end_ts))
+                dy_dt = float(spline['spline_y'].derivative()(end_ts))
+                dz_dt = float(spline['spline_z'].derivative()(end_ts))
+                
+                # Predict where the trajectory should be at pt_ts
+                delta_t = pt_ts - end_ts
+                pred_x = end_x + dx_dt * delta_t
+                pred_y = end_y + dy_dt * delta_t
+                pred_z = end_z + dz_dt * delta_t
+                
+                # Blend actual point with prediction for smoothness
+                smooth_x = smoothing_factor * pred_x + (1 - smoothing_factor) * pt_x
+                smooth_y = smoothing_factor * pred_y + (1 - smoothing_factor) * pt_y
+                smooth_z = smoothing_factor * pred_z + (1 - smoothing_factor) * pt_z
+                
+                # Append smoothed point
+                ts_new = np.append(spline['ts'], pt_ts)
+                x_new = np.append(spline['spline_x'](spline['ts']), smooth_x)
+                y_new = np.append(spline['spline_y'](spline['ts']), smooth_y)
+                z_new = np.append(spline['spline_z'](spline['ts']), smooth_z)
+                
+            else:  # backward extension
+                # Create a smooth transition between the new point and the spline start
+                start_ts = ts_min
+                start_x = float(spline['spline_x'](start_ts))
+                start_y = float(spline['spline_y'](start_ts))
+                start_z = float(spline['spline_z'](start_ts))
+                
+                # Calculate derivatives at the start point
+                dx_dt = float(spline['spline_x'].derivative()(start_ts))
+                dy_dt = float(spline['spline_y'].derivative()(start_ts))
+                dz_dt = float(spline['spline_z'].derivative()(start_ts))
+                
+                # Predict where the trajectory should have been at pt_ts
+                delta_t = pt_ts - start_ts
+                pred_x = start_x - dx_dt * (-delta_t)  # Note the negative delta_t
+                pred_y = start_y - dy_dt * (-delta_t)
+                pred_z = start_z - dz_dt * (-delta_t)
+                
+                # Blend actual point with prediction for smoothness
+                smooth_x = smoothing_factor * pred_x + (1 - smoothing_factor) * pt_x
+                smooth_y = smoothing_factor * pred_y + (1 - smoothing_factor) * pt_y
+                smooth_z = smoothing_factor * pred_z + (1 - smoothing_factor) * pt_z
+                
+                # Prepend smoothed point
+                ts_new = np.append(pt_ts, spline['ts'])
+                x_new = np.append(smooth_x, spline['spline_x'](spline['ts']))
+                y_new = np.append(smooth_y, spline['spline_y'](spline['ts']))
+                z_new = np.append(smooth_z, spline['spline_z'](spline['ts']))
+            
+            # Ensure data is sorted by timestamp
+            idx = np.argsort(ts_new)
+            ts_sorted = ts_new[idx]
+            x_sorted = x_new[idx]
+            y_sorted = y_new[idx]
+            z_sorted = z_new[idx]
+            
+            # Fit new spline with smoothing
+            if len(ts_sorted) >= 4:
+                s = 0.1  # Smoothing parameter for spline fitting
+                spline_dicts[closest_spline_idx]['spline_x'] = make_interp_spline(ts_sorted, x_sorted, k=3)
+                spline_dicts[closest_spline_idx]['spline_y'] = make_interp_spline(ts_sorted, y_sorted, k=3)
+                spline_dicts[closest_spline_idx]['spline_z'] = make_interp_spline(ts_sorted, z_sorted, k=3)
+                spline_dicts[closest_spline_idx]['ts'] = ts_sorted
+                extended_timestamps.add(pt_ts)
+    
+    # Second pass: Try merging splines when a point bridges them
+    merged_splines = True
+    while merged_splines:
+        merged_splines = False
+        
+        # Create a mapping of timestamps to spline indices for efficient lookup
+        ts_to_spline = {}
+        for i, spline in enumerate(spline_dicts):
+            min_ts, max_ts = np.min(spline['ts']), np.max(spline['ts'])
+            ts_to_spline[(min_ts, max_ts)] = i
+        
+        # For each point, check if it can merge two splines
+        for pt_x, pt_y, pt_z, pt_ts in tpns_sorted:
+            if pt_ts in extended_timestamps:
+                continue
+                
+            # Find splines that could be merged using this point
+            potential_merges = []
+            for (min_ts1, max_ts1), i in ts_to_spline.items():
+                for (min_ts2, max_ts2), j in ts_to_spline.items():
+                    if i >= j:  # Avoid checking the same pair twice
+                        continue
+                        
+                    # Check if point falls between splines within merge window
+                    if (0 < pt_ts - max_ts1 < blend_window and 
+                        0 < min_ts2 - pt_ts < blend_window):
+                        potential_merges.append((i, j, abs(pt_ts - max_ts1) + abs(min_ts2 - pt_ts)))
+            
+            # Sort potential merges by total time gap
+            potential_merges.sort(key=lambda x: x[2])
+            
+            if potential_merges:
+                i, j, _ = potential_merges[0]
+                s1, s2 = spline_dicts[i], spline_dicts[j]
+                
+                # Create overlap region for smooth transition
+                end_ts1 = np.max(s1['ts'])
+                start_ts2 = np.min(s2['ts'])
+                
+                # Extract endpoint derivatives
+                dx1_dt = float(s1['spline_x'].derivative()(end_ts1))
+                dy1_dt = float(s1['spline_y'].derivative()(end_ts1))
+                dz1_dt = float(s1['spline_z'].derivative()(end_ts1))
+                
+                dx2_dt = float(s2['spline_x'].derivative()(start_ts2))
+                dy2_dt = float(s2['spline_y'].derivative()(start_ts2))
+                dz2_dt = float(s2['spline_z'].derivative()(start_ts2))
+                
+                # Create smooth interpolation at the junction
+                # Hermite interpolation to blend the two splines
+                def hermite_blend(t, p0, p1, m0, m1):
+                    t2 = t * t
+                    t3 = t2 * t
+                    h00 = 2 * t3 - 3 * t2 + 1  # Hermite basis function
+                    h10 = t3 - 2 * t2 + t
+                    h01 = -2 * t3 + 3 * t2
+                    h11 = t3 - t2
+                    return h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1
+                
+                # Create transition points
+                n_blend = 5  # Number of blend points
+                blend_ts = np.linspace(end_ts1, start_ts2, n_blend + 2)[1:-1]  # Exclude endpoints
+                
+                end_x1 = float(s1['spline_x'](end_ts1))
+                end_y1 = float(s1['spline_y'](end_ts1))
+                end_z1 = float(s1['spline_z'](end_ts1))
+                
+                start_x2 = float(s2['spline_x'](start_ts2))
+                start_y2 = float(s2['spline_y'](start_ts2))
+                start_z2 = float(s2['spline_z'](start_ts2))
+                
+                # Generate blend points
+                blend_x = []
+                blend_y = []
+                blend_z = []
+                
+                for t in blend_ts:
+                    # Normalize t for hermite interpolation
+                    t_norm = (t - end_ts1) / (start_ts2 - end_ts1)
+                    
+                    # Scale derivatives by time difference
+                    dt = start_ts2 - end_ts1
+                    m0_x = dx1_dt * dt
+                    m0_y = dy1_dt * dt
+                    m0_z = dz1_dt * dt
+                    m1_x = dx2_dt * dt
+                    m1_y = dy2_dt * dt
+                    m1_z = dz2_dt * dt
+                    
+                    # Apply hermite blending
+                    x_t = hermite_blend(t_norm, end_x1, start_x2, m0_x, m1_x)
+                    y_t = hermite_blend(t_norm, end_y1, start_y2, m0_y, m1_y)
+                    z_t = hermite_blend(t_norm, end_z1, start_z2, m0_z, m1_z)
+                    
+                    blend_x.append(x_t)
+                    blend_y.append(y_t)
+                    blend_z.append(z_t)
+                
+                # Create merged spline with smooth junction
+                ts_merged = np.concatenate((s1['ts'], blend_ts, s2['ts']))
+                x_merged = np.concatenate((s1['spline_x'](s1['ts']), blend_x, s2['spline_x'](s2['ts'])))
+                y_merged = np.concatenate((s1['spline_y'](s1['ts']), blend_y, s2['spline_y'](s2['ts'])))
+                z_merged = np.concatenate((s1['spline_z'](s1['ts']), blend_z, s2['spline_z'](s2['ts'])))
+                
+                # Sort by timestamp
+                idx = np.argsort(ts_merged)
+                ts_sorted = ts_merged[idx]
+                x_sorted = x_merged[idx]
+                y_sorted = y_merged[idx]
+                z_sorted = z_merged[idx]
+                
+                # Create new spline with additional smoothing
+                s = 0.1  # Smoothing parameter
+                new_spline = {
+                    'spline_x': make_interp_spline(ts_sorted, x_sorted, k=3),
+                    'spline_y': make_interp_spline(ts_sorted, y_sorted, k=3),
+                    'spline_z': make_interp_spline(ts_sorted, z_sorted, k=3),
+                    'ts': ts_sorted
+                }
+                
+                # Remove old splines and add the merged one
+                new_spline_list = [s for k, s in enumerate(spline_dicts) if k != i and k != j]
+                new_spline_list.append(new_spline)
+                spline_dicts = new_spline_list
+                extended_timestamps.add(pt_ts)
+                merged_splines = True
+                break  # Need to rebuild ts_to_spline mapping
+    
+    # Third pass: Create new splines for remaining points
+    remaining_points = []
+    for pt in tpns_sorted:
+        if pt[3] not in extended_timestamps:
+            remaining_points.append(pt)
+    
+    # Group remaining points by proximity in time
+    if remaining_points:
+        remaining_points.sort(key=lambda pt: pt[3])
+        point_groups = []
+        current_group = [remaining_points[0]]
+        
+        for i in range(1, len(remaining_points)):
+            if remaining_points[i][3] - remaining_points[i-1][3] < blend_window:
+                current_group.append(remaining_points[i])
+            else:
+                if len(current_group) >= 4:  # Need at least 4 points for cubic spline
+                    point_groups.append(current_group)
+                current_group = [remaining_points[i]]
+        
+        if len(current_group) >= 4:
+            point_groups.append(current_group)
+        
+        # Create new splines for each group
+        for group in point_groups:
+            group_array = np.array(group)
+            ts = group_array[:, 3]
+            
+            # Apply smoothing directly during spline creation
+            s = 0.1  # Smoothing parameter
+            new_spline = {
+                'spline_x': make_interp_spline(ts, group_array[:, 0], k=3),
+                'spline_y': make_interp_spline(ts, group_array[:, 1], k=3),
+                'spline_z': make_interp_spline(ts, group_array[:, 2], k=3),
+                'ts': ts
+            }
+            spline_dicts.append(new_spline)
+    
+    return spline_dicts
   
 if __name__ == "__main__":
     
@@ -466,7 +771,7 @@ if __name__ == "__main__":
     if not os.path.exists(f"beta_results_dataset{DATASET_NO}.csv"):
         logging.info("Beta results file not found, starting beta search")
         first_beta_search(DATASET_NO, beta_shift=2000)
-      
+    
     logging.info("Loading beta results")  
     betas_df = pd.read_csv(f"beta_results_dataset{DATASET_NO}.csv")
     betas_df = betas_df.sort_values(by='inlier_ratio', ascending=False)
@@ -543,6 +848,7 @@ if __name__ == "__main__":
 
     # ============== Step 2.1: Add cameras in decreasing order of inlier ratio ==============
     cameras_processed = [int(main_camera), int(secondary_camera)]
+    cameras_skipped = []
     main_camera_index = 0
     old_main_camera = int(main_camera)
     stop = False
@@ -569,12 +875,14 @@ if __name__ == "__main__":
             nth_best_beta = betas_here_df.iloc[next_in_line]['beta']
             inlier_ratio = betas_here_df.iloc[next_in_line]['inlier_ratio']
             main_camera = betas_here_df.iloc[next_in_line]['main_camera']
+            num_inliers = betas_here_df.iloc[next_in_line]['num_inliers'] if 'num_inliers' in betas_here_df.columns else np.inf
             next_in_line += 1
             
-            if inlier_ratio < 0.5:
-                logging.warning(f"Low inlier ratio for primary camera {main_camera} and secondary camera {new_camera}: {inlier_ratio:.4f}")
+            if inlier_ratio < 0.5 or num_inliers < 200:
+                logging.warning(f"Low inlier ratio or insufficient support for camera pair {main_camera}-{new_camera}: {inlier_ratio:.4f}, num_inliers: {num_inliers}")
                 if next_in_line >= len(betas_here_df):
                     logging.warning(f"Unable to find a valid camera pair with sufficient inlier ratio. skipping camera")
+                    cameras_skipped.append(new_camera)
                     stop = True
                     break
                 continue
@@ -604,7 +912,7 @@ if __name__ == "__main__":
             
         logging.info(f"{len(cameras_processed)}-th best beta: {nth_best_beta}, main camera: {main_camera}, secondary camera: {new_camera}, inliers: {inlier_ratio:.4f}")
         
-        # Load the frames for the second best beta
+        # Load the frames for the nth best beta
         frames = df[df['cam_id'] == int(new_camera)][['frame_id', 'detection_x', 'detection_y']].values
         frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
         frames = np.array(frames)
@@ -685,7 +993,7 @@ if __name__ == "__main__":
             tpns_to_add_to_3d[:, 0], 
             tpns_to_add_to_3d[:, 1], 
             tpns_to_add_to_3d[:, 2], 
-            c='blue', s=1, label=f"Triangulated Points {len(cameras_processed)}th step"
+            c='blue', s=1, label=f"Triangulated Points after adding camera {new_camera}"
         )
 
         # Plot splines in red
@@ -714,93 +1022,8 @@ if __name__ == "__main__":
             'ts': ts.copy()
         } for spline_x, spline_y, spline_z, ts in splines_3d]
 
-        tpns_sorted = sorted(tpns_to_add_to_3d_with_timestamps, key=lambda pt: pt[3])
-        extended_timestamps = set()
-        merge_window = 5.0  # seconds
-
-        for pt_x, pt_y, pt_z, pt_ts in tpns_sorted:
-            if pt_ts in extended_timestamps:
-                continue
-
-            extended = False
-
-            # Try forward or backward extension
-            for spline in spline_dicts:
-                ts_min, ts_max = np.min(spline['ts']), np.max(spline['ts'])
-
-                if 0 < pt_ts - ts_max <= 5:  # Forward
-                    ts_new = np.append(spline['ts'], pt_ts)
-                    x_new = np.append(spline['spline_x'](spline['ts']), pt_x)
-                    y_new = np.append(spline['spline_y'](spline['ts']), pt_y)
-                    z_new = np.append(spline['spline_z'](spline['ts']), pt_z)
-
-                elif 0 < ts_min - pt_ts <= 5:  # Backward
-                    ts_new = np.append(pt_ts, spline['ts'])
-                    x_new = np.append(pt_x, spline['spline_x'](spline['ts']))
-                    y_new = np.append(pt_y, spline['spline_y'](spline['ts']))
-                    z_new = np.append(pt_z, spline['spline_z'](spline['ts']))
-                else:
-                    continue
-
-                # Always sort by time
-                idx = np.argsort(ts_new)
-                ts_sorted = ts_new[idx]
-                x_sorted = x_new[idx]
-                y_sorted = y_new[idx]
-                z_sorted = z_new[idx]
-
-                if len(ts_sorted) >= 4:
-                    spline['spline_x'] = make_interp_spline(ts_sorted, x_sorted, k=3)
-                    spline['spline_y'] = make_interp_spline(ts_sorted, y_sorted, k=3)
-                    spline['spline_z'] = make_interp_spline(ts_sorted, z_sorted, k=3)
-                    spline['ts'] = ts_sorted
-                    extended_timestamps.add(pt_ts)
-                    extended = True
-                    break
-
-            if extended:
-                continue
-
-            # Try merging two splines if point bridges them
-            for i, s1 in enumerate(spline_dicts):
-                for j, s2 in enumerate(spline_dicts):
-                    if i == j:
-                        continue
-                    end1, start2 = np.max(s1['ts']), np.min(s2['ts'])
-
-                    if 0 < pt_ts - end1 <= merge_window and 0 < start2 - pt_ts <= merge_window:
-                        # Bridge candidate
-                        ts_merged = np.concatenate((s1['ts'], [pt_ts], s2['ts']))
-                        x_merged = np.concatenate((s1['spline_x'](s1['ts']), [pt_x], s2['spline_x'](s2['ts'])))
-                        y_merged = np.concatenate((s1['spline_y'](s1['ts']), [pt_y], s2['spline_y'](s2['ts'])))
-                        z_merged = np.concatenate((s1['spline_z'](s1['ts']), [pt_z], s2['spline_z'](s2['ts'])))
-
-                        idx = np.argsort(ts_merged)
-                        ts_sorted = ts_merged[idx]
-                        x_sorted = x_merged[idx]
-                        y_sorted = y_merged[idx]
-                        z_sorted = z_merged[idx]
-
-                        if len(ts_sorted) >= 4:
-                            new_spline = {
-                                'spline_x': make_interp_spline(ts_sorted, x_sorted, k=3),
-                                'spline_y': make_interp_spline(ts_sorted, y_sorted, k=3),
-                                'spline_z': make_interp_spline(ts_sorted, z_sorted, k=3),
-                                'ts': ts_sorted
-                            }
-
-                            # Replace old splines with merged one
-                            new_spline_list = []
-                            for k, s in enumerate(spline_dicts):
-                                if k not in (i, j):
-                                    new_spline_list.append(s)
-                            new_spline_list.append(new_spline)
-                            spline_dicts = new_spline_list
-                            extended_timestamps.add(pt_ts)
-                            extended = True
-                            break
-                if extended:
-                    break
+        spline_dicts = merge_and_smooth_splines(spline_dicts, tpns_to_add_to_3d_with_timestamps)
+                
         # Convert back to original format
         splines_3d = [(s['spline_x'], s['spline_y'], s['spline_z'], s['ts']) for s in spline_dicts]
         
