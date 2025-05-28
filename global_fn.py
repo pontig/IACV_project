@@ -1,4 +1,7 @@
 import numpy as np
+import cv2 as cv
+import warnings
+import logging
 
 alphas = [1.0, 2.0069, 1.9981, 2.0003, 2.0002, 1.1988, 2.3975]
 betas = [0, -2320.6, -2255.38, -2440.13, -1997.91, -3618.11, -3745.56]
@@ -45,3 +48,68 @@ def get_rainbow_color(global_timestamp):
     # Normalize the color to [0, 1]
     color = (color + 1) / 2
     return tuple(color)
+
+def evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_list=None, return_f=False):
+    """
+    Calculate inlier ratio for a given beta value between two cameras
+    
+    Parameters:
+    -----------
+    b : float
+        Beta value to test
+    frames : list
+        List of frames from secondary camera with detection points
+    splines : dict
+        Dictionary of splines for all cameras
+    camera_info : dict
+        Dictionary of camera information
+    main_camera : int
+        ID of main camera
+    secondary_camera : int
+        ID of secondary camera
+    inliers_list : list, optional
+        List to append inlier ratio to
+    return_f : boolean, optional
+        Whether to return also the fundamental matrix for a specific beta passed
+        
+    Returns:
+    --------
+    float
+        Inlier ratio for the given beta
+    """
+    correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), global_ts
+    for frame in frames:
+        global_ts = compute_global_time(frame[0], camera_info[main_camera].fps/camera_info[secondary_camera].fps, b)
+        for spline_x, spline_y, tss in splines[main_camera]:
+            if np.min(tss) <= global_ts <= np.max(tss):
+                x1 = float(spline_x(global_ts))
+                y1 = float(spline_y(global_ts))
+                correspondences.append((
+                    (x1, y1),
+                    (frame[1], frame[2]),
+                    global_ts
+                ))
+                break
+            
+    if not correspondences:
+        warnings.warn(f"No overlapping frames found between cameras {main_camera} and {secondary_camera} for beta: {b}")
+        if inliers_list is not None:
+            inliers_list.append(0)
+        return 0
+
+    # Estimate the fundamental matrix
+    F, mask = cv.findFundamentalMat(
+        np.array([x for x, _, _ in correspondences]),
+        np.array([y for _, y, _ in correspondences]),
+        cv.RANSAC
+    )
+
+    inlier_ratio = np.sum(mask) / len(mask) if mask is not None else 0
+    # logging.info(f"Cameras {main_camera}-{secondary_camera}, beta: {b:.3f}, inliers: {inlier_ratio:.4f}, correspondences: {len(correspondences)}")
+    
+    if inliers_list is not None:
+        inliers_list.append(inlier_ratio)
+        
+    if return_f:
+        return F, mask, correspondences
+    return inlier_ratio, len(correspondences)

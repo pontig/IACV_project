@@ -83,7 +83,51 @@ def plot_refinement_process(beta_values_coarse, inliers_coarse, best_beta_coarse
     
     # Create plots directory if it doesn't exist
     os.makedirs("plots", exist_ok=True)
-    plt.savefig(f"plots/inliers_vs_beta_refinement_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png", dpi=300)
+    plt.savefig(f"plots/inliers_vs_beta_refinement_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png")
+
+def plot_combined_results(beta_values_coarse, inliers_coarse, best_beta_coarse, max_inliers_coarse,
+                          beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
+                          beta_values_finer, inliers_finer, best_beta_finer, max_inliers_finer,
+                          beta_values_finest, inliers_finest, best_beta_finest, max_inliers_finest,
+                          main_camera, secondary_camera, dataset_no):
+    """
+    Plot combined results of beta search
+    
+    Parameters:
+    -----------
+    (same as plot_refinement_process)
+    """
+    figsize = (28, 15)
+    
+    # Combined visualization in one plot with different colors and transparency
+    plt.figure(figsize=figsize)
+    plt.plot(beta_values_coarse, inliers_coarse, 'b-', alpha=0.5, linewidth=1, label='Coarse')
+    plt.plot(beta_values_fine, inliers_fine, 'r-', alpha=0.6, linewidth=1.5, label='Fine')
+    plt.plot(beta_values_finer, inliers_finer, 'g-', alpha=0.7, linewidth=2, label='Finer')
+    plt.plot(beta_values_finest, inliers_finest, 'm-', alpha=1.0, linewidth=2.5, label='Finest')
+
+    # Mark the best beta for each refinement level
+    plt.scatter(best_beta_coarse, max_inliers_coarse, c='blue', marker='*', s=200, 
+               label=f'Best β (Coarse)={best_beta_coarse}')
+    plt.scatter(best_beta_fine, max_inliers_fine, c='red', marker='*', s=200, 
+               label=f'Best β (Fine)={best_beta_fine}')
+    plt.scatter(best_beta_finer, max_inliers_finer, c='green', marker='*', s=200, 
+               label=f'Best β (Finer)={best_beta_finer}')
+    plt.scatter(best_beta_finest, max_inliers_finest, c='magenta', marker='*', s=300, 
+               label=f'Best β (Finest)={best_beta_finest}')
+
+    plt.title(f'Multi-level Beta Search Refinement (Cameras {main_camera}-{secondary_camera})', fontsize=18)
+    plt.xlabel('Beta', fontsize=14)
+    plt.ylabel('Inlier Ratio', fontsize=14)
+    plt.ylim(-0.1, 1.1)
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    
+    # Create plots directory if it doesn't exist
+    os.makedirs("plots", exist_ok=True)
+    plt.savefig(f"plots/inliers_vs_beta_combined_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png")
+    plt.close()
 
 def plot_triangulated_points(triangulated_points, main_camera, secondary_camera, output_dir="plots"):
     """Plot triangulated 3D points and save the figure."""

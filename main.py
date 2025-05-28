@@ -40,327 +40,8 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 # Add both handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
-DATASET_NO = 1
+DATASET_NO = 4
 
-def evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_list=None, return_f=False):
-    """
-    Calculate inlier ratio for a given beta value between two cameras
-    
-    Parameters:
-    -----------
-    b : float
-        Beta value to test
-    frames : list
-        List of frames from secondary camera with detection points
-    splines : dict
-        Dictionary of splines for all cameras
-    camera_info : dict
-        Dictionary of camera information
-    main_camera : int
-        ID of main camera
-    secondary_camera : int
-        ID of secondary camera
-    inliers_list : list, optional
-        List to append inlier ratio to
-    return_f : boolean, optional
-        Whether to return also the fundamental matrix for a specific beta passed
-        
-    Returns:
-    --------
-    float
-        Inlier ratio for the given beta
-    """
-    correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), global_ts
-    for frame in frames:
-        global_ts = compute_global_time(frame[0], camera_info[main_camera].fps/camera_info[secondary_camera].fps, b)
-        for spline_x, spline_y, tss in splines[main_camera]:
-            if np.min(tss) <= global_ts <= np.max(tss):
-                x1 = float(spline_x(global_ts))
-                y1 = float(spline_y(global_ts))
-                correspondences.append((
-                    (x1, y1),
-                    (frame[1], frame[2]),
-                    global_ts
-                ))
-                break
-            
-    if not correspondences:
-        warnings.warn(f"No overlapping frames found between cameras {main_camera} and {secondary_camera} for beta: {b}")
-        if inliers_list is not None:
-            inliers_list.append(0)
-        return 0
-
-    # Estimate the fundamental matrix
-    F, mask = cv.findFundamentalMat(
-        np.array([x for x, _, _ in correspondences]),
-        np.array([y for _, y, _ in correspondences]),
-        cv.RANSAC
-    )
-
-    inlier_ratio = np.sum(mask) / len(mask) if mask is not None else 0
-    logging.info(f"Cameras {main_camera}-{secondary_camera}, beta: {b:.3f}, inliers: {inlier_ratio:.4f}, correspondences: {len(correspondences)}")
-    
-    if inliers_list is not None:
-        inliers_list.append(inlier_ratio)
-        
-    if return_f:
-        return F, mask, correspondences
-    return inlier_ratio, len(correspondences)
-
-def plot_combined_results(beta_values_coarse, inliers_coarse, best_beta_coarse, max_inliers_coarse,
-                          beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
-                          beta_values_finer, inliers_finer, best_beta_finer, max_inliers_finer,
-                          beta_values_finest, inliers_finest, best_beta_finest, max_inliers_finest,
-                          main_camera, secondary_camera, dataset_no):
-    """
-    Plot combined results of beta search
-    
-    Parameters:
-    -----------
-    (same as plot_refinement_process)
-    """
-    figsize = (28, 15)
-    
-    # Combined visualization in one plot with different colors and transparency
-    plt.figure(figsize=figsize)
-    plt.plot(beta_values_coarse, inliers_coarse, 'b-', alpha=0.5, linewidth=1, label='Coarse')
-    plt.plot(beta_values_fine, inliers_fine, 'r-', alpha=0.6, linewidth=1.5, label='Fine')
-    plt.plot(beta_values_finer, inliers_finer, 'g-', alpha=0.7, linewidth=2, label='Finer')
-    plt.plot(beta_values_finest, inliers_finest, 'm-', alpha=1.0, linewidth=2.5, label='Finest')
-
-    # Mark the best beta for each refinement level
-    plt.scatter(best_beta_coarse, max_inliers_coarse, c='blue', marker='*', s=200, 
-               label=f'Best β (Coarse)={best_beta_coarse}')
-    plt.scatter(best_beta_fine, max_inliers_fine, c='red', marker='*', s=200, 
-               label=f'Best β (Fine)={best_beta_fine}')
-    plt.scatter(best_beta_finer, max_inliers_finer, c='green', marker='*', s=200, 
-               label=f'Best β (Finer)={best_beta_finer}')
-    plt.scatter(best_beta_finest, max_inliers_finest, c='magenta', marker='*', s=300, 
-               label=f'Best β (Finest)={best_beta_finest}')
-
-    plt.title(f'Multi-level Beta Search Refinement (Cameras {main_camera}-{secondary_camera})', fontsize=18)
-    plt.xlabel('Beta', fontsize=14)
-    plt.ylabel('Inlier Ratio', fontsize=14)
-    plt.ylim(-0.1, 1.1)
-    plt.grid(True, alpha=0.3)
-    plt.legend(fontsize=12)
-    plt.tight_layout()
-    
-    # Create plots directory if it doesn't exist
-    os.makedirs("plots", exist_ok=True)
-    plt.savefig(f"plots/inliers_vs_beta_combined_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png", dpi=300)
-    plt.close()
-
-def search_optimal_beta(frames, splines, camera_info, main_camera, secondary_camera, dataset_no, beta_shift):
-    """
-    Perform multi-level search to find the optimal beta between two cameras
-    
-    Parameters:
-    -----------
-    frames : list
-        List of frames from secondary camera with detection points
-    splines : dict
-        Dictionary of splines for all cameras
-    camera_info : dict
-        Dictionary of camera information
-    main_camera : int
-        ID of main camera
-    secondary_camera : int
-        ID of secondary camera
-    dataset_no : int
-        Dataset number
-    beta_shift : int, optional
-        Initial beta search range, defaults to 4000
-        
-    Returns:
-    --------
-    float
-        Optimal beta value
-    float
-        Maximum inlier ratio
-    """
-    logging.info(f"===== Starting beta search for cameras {main_camera}-{secondary_camera} =====")
-    print(f"===== Starting beta search for cameras {main_camera}-{secondary_camera} =====")
-    inliers_coarse = []
-    inliers_fine = []
-    inliers_finer = []
-    inliers_finest = []
-    
-    coarse_step = 2
-    fine_step = .5
-    finer_step = 0.1
-    finest_step = 0.01
-    
-    # Step 1: Coarse Search
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Starting coarse search")
-    beta_coarse = np.arange(-beta_shift, beta_shift, coarse_step)
-    beta_values_coarse = []
-
-    for b in beta_coarse:
-        evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_coarse)
-        beta_values_coarse.append(b)
-        
-    best_beta_coarse = beta_coarse[np.argmax(inliers_coarse)]
-    max_inliers_coarse = np.max(inliers_coarse)
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: End of coarse search")
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Best beta (coarse): {best_beta_coarse}, inliers: {max_inliers_coarse:.4f}")
-
-    # Step 2: Fine Search
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Starting fine search")
-    beta_fine = np.arange(best_beta_coarse - 100, best_beta_coarse + 100, fine_step)
-    beta_values_fine = []
-
-    for b in beta_fine:
-        evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_fine)
-        beta_values_fine.append(b)
-
-    best_beta_fine = beta_fine[np.argmax(inliers_fine)]
-    max_inliers_fine = np.max(inliers_fine)
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: End of fine search")
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Best beta (fine): {best_beta_fine}, inliers: {max_inliers_fine:.4f}")
-
-    # Step 3: Finer Search
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Starting finer search")
-    beta_finer = np.arange(best_beta_fine - 10, best_beta_fine + 10, finer_step)
-    beta_values_finer = []
-
-    for b in beta_finer:
-        evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_finer)
-        beta_values_finer.append(b)
-
-    best_beta_finer = beta_finer[np.argmax(inliers_finer)]
-    max_inliers_finer = np.max(inliers_finer)
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: End of finer search")
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Best beta (finer): {best_beta_finer}, inliers: {max_inliers_finer:.4f}")
-
-    # Step 4: Finest Search
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Starting finest search")
-    beta_finest = np.arange(best_beta_finer - 1, best_beta_finer + 1, finest_step)
-    beta_values_finest = []
-    num_inliers = []
-
-    for b in beta_finest:
-        _, ni = evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_finest)
-        beta_values_finest.append(b)
-        num_inliers.append(ni)
-
-    best_beta_finest = beta_finest[np.argmax(inliers_finest)]
-    max_inliers_finest = np.max(inliers_finest)
-    max_inliers_finest_abs_n = num_inliers[np.argmax(inliers_finest)]
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: End of finest search")
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Best beta (finest): {best_beta_finest}, inliers: {max_inliers_finest:.4f}, that are {max_inliers_finest_abs_n} inliers")
-
-    # Final result
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Final Result")
-    logging.info(f"Cameras {main_camera}-{secondary_camera}: Best beta: {best_beta_finest}, inliers: {max_inliers_finest:.4f}, that are {max_inliers_finest_abs_n} inliers")
-    
-    # Generate plots
-    plot_refinement_process(
-        beta_values_coarse, inliers_coarse, best_beta_coarse, max_inliers_coarse,
-        beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
-        beta_values_finer, inliers_finer, best_beta_finer, max_inliers_finer,
-        beta_values_finest, inliers_finest, best_beta_finest, max_inliers_finest,
-        main_camera, secondary_camera, dataset_no
-    )
-    
-    plot_combined_results(
-        beta_values_coarse, inliers_coarse, best_beta_coarse, max_inliers_coarse,
-        beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
-        beta_values_finer, inliers_finer, best_beta_finer, max_inliers_finer,
-        beta_values_finest, inliers_finest, best_beta_finest, max_inliers_finest,
-        main_camera, secondary_camera, dataset_no
-    )
-    
-    return best_beta_finest, max_inliers_finest, max_inliers_finest_abs_n
-
-def process_camera_pair(main_camera, secondary_camera, df, splines, camera_info, dataset_no, beta_shift):
-    """Process a single camera pair to find optimal beta"""
-    if main_camera == secondary_camera:
-        return None
-
-    logging.info(f"Processing camera pair: main={main_camera}, secondary={secondary_camera}")
-    
-    # Get frames from secondary camera with valid detections
-    frames = df[df['cam_id'] == secondary_camera][['frame_id', 'detection_x', 'detection_y']].values
-    frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
-    
-    if not frames:
-        logging.warning(f"No valid frames found for camera {secondary_camera}")
-        return None
-        
-    # Find optimal beta
-    best_beta, max_inliers, max_inliers_abs = search_optimal_beta(
-        frames, splines, camera_info, 
-        main_camera, secondary_camera, 
-        dataset_no, beta_shift
-    )
-    
-    # Store result
-    return {
-        "key": f"{main_camera}-{secondary_camera}",
-        "main_camera": main_camera,
-        "secondary_camera": secondary_camera,
-        "beta": best_beta,
-        "inlier_ratio": max_inliers,
-        "inlier_count": max_inliers_abs
-    }
-
-def first_beta_search(dataset_no=DATASET_NO, beta_shift=1):
-    """
-    Main function to find optimal beta values for all camera combinations
-    """
-    start_time = time.time()
-    logging.info(f"Starting beta search process for dataset {dataset_no}")
-        
-    # Results dictionary to store all beta values
-    results = {}
-    
-    # Create pairs of camera indices to process
-    camera_pairs = [(m, s) for m in range(len(cameras)) for s in range(len(cameras)) if m != s]
-    
-    # Use ProcessPoolExecutor for parallel processing
-    max_workers = min(10, os.cpu_count() or 4)  # Use min of 10 or available CPU cores
-    logging.info(f"Using ProcessPoolExecutor with {max_workers} workers")
-    
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        future_to_pair = {
-            executor.submit(
-                process_camera_pair, 
-                m, s, 
-                df, splines, camera_info, dataset_no, beta_shift
-            ): (m, s) for m, s in camera_pairs
-        }
-        
-        for future in concurrent.futures.as_completed(future_to_pair):
-            pair = future_to_pair[future]
-            try:
-                result = future.result()
-                if result:
-                    results[result["key"]] = {
-                        "main_camera": result["main_camera"],
-                        "secondary_camera": result["secondary_camera"],
-                        "beta": result["beta"],
-                        "inlier_ratio": result["inlier_ratio"],
-                        "inlier_count": result["inlier_count"]
-                    }
-                    logging.info(f"Completed pair {pair[0]}-{pair[1]}")
-            except Exception as exc:
-                logging.error(f"Pair {pair[0]}-{pair[1]} generated an exception: {exc}")
-                logging.error(f"Exception details: {str(exc)}")
-                import traceback
-                logging.error(traceback.format_exc())
-    
-    # Save all results to a separate log file
-    result_log_path = f"logs/beta_results_dataset{dataset_no}.csv"
-    with open(result_log_path, 'w') as f:
-        f.write("main_camera,secondary_camera,beta,inlier_ratio,num_inliers\n")
-        for key, value in results.items():
-            f.write(f"{value['main_camera']},{value['secondary_camera']},{value['beta']:.4f},{value['inlier_ratio']:.4f},{value['inlier_count']}\n")
-    
-    logging.info(f"Results saved to {result_log_path}")
-    logging.info(f"Total execution time: {(time.time() - start_time)/60:.2f} minutes")
-    
-    return results
 
 def to_normalized_camera_coord(pts, K, distcoeff):
     """
@@ -762,6 +443,7 @@ if __name__ == "__main__":
         cameras = f.read().strip().split()    
     cameras = cameras[2::3]
     logging.info(f"Loaded {len(cameras)} cameras")
+    np.savez_compressed("cameras.npz", cameras=cameras)
     camera_poses = [{"cam_id": i, "R": None, "t": None, 'b': None} for i in range(len(cameras))]
     
     # Load dataframe and splines
@@ -769,8 +451,8 @@ if __name__ == "__main__":
     df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
     
     if not os.path.exists(f"beta_results_dataset{DATASET_NO}.csv"):
-        logging.info("Beta results file not found, starting beta search")
-        first_beta_search(DATASET_NO, beta_shift=2000)
+        logging.error("Beta results file not found. Please run the beta searcher first.")
+        sys.exit(1)
     
     logging.info("Loading beta results")  
     betas_df = pd.read_csv(f"beta_results_dataset{DATASET_NO}.csv")
@@ -944,8 +626,10 @@ if __name__ == "__main__":
             np.array([y for _, y, _ in correspondences_2], dtype=np.float32),
             camera_info[int(new_camera)].K_matrix,
             camera_info[int(new_camera)].distCoeff,
-            confidence=.999
+            confidence=.999, reprojectionError=12.0,
         )
+        
+        logging.info(f"Camera pose for camera {new_camera} computed with {len(correspondences_2)} correspondences, and {len(inliers)} inliers, inliers ratio: {len(inliers)/len(correspondences_2):.4f}")
         
         camera_poses[int(new_camera)] = {
             "cam_id": int(new_camera),
@@ -993,7 +677,7 @@ if __name__ == "__main__":
             tpns_to_add_to_3d[:, 0], 
             tpns_to_add_to_3d[:, 1], 
             tpns_to_add_to_3d[:, 2], 
-            c='blue', s=1, label=f"Triangulated Points after adding camera {new_camera}"
+            c='blue', s=1, label=f"Triangulated Points for pair main-new {main_camera}-{new_camera}"
         )
 
         # Plot splines in red
