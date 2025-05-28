@@ -7,3 +7,6 @@ plots/
 detections.csv
 
 logs/
+
+*.npz
+*.mp4
