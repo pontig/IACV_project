@@ -24,6 +24,7 @@ setup(
             'talker = drones.publisher_member_function:main',
             'listener = drones.subscriber_member_function:main',
             'drones = drones.drones:main',
+            'live_detections_generator = drones.live_detections_generator:main',
         ],
     },  
 

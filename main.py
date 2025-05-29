@@ -471,7 +471,7 @@ if __name__ == "__main__":
     first_main_camera = main_camera
     first_beta = best_beta
     
-    logging.info(f"Best beta: {best_beta}, main camera: {main_camera}, secondary camera: {secondary_camera}, inliers: {betas_df.iloc[0]['inlier_ratio']:.4f}")
+    logging.info(f"Best beta: {best_beta}, main camera: {main_camera}, secondary camera: {secondary_camera}, inlier_ratio: {betas_df.iloc[0]['inlier_ratio']:.4f}")
     
     F, mask, correspondences = evaluate_beta(best_beta, frames, splines, camera_info, int(main_camera), int(secondary_camera), return_f=True)
     E = camera_info[int(main_camera)].K_matrix.T @ F @ camera_info[int(secondary_camera)].K_matrix

@@ -5,7 +5,9 @@ from scipy.interpolate import make_interp_spline
 import numpy as np
 import cv2 as cv
 import matplotlib.pyplot as plt
-
+from scipy.interpolate import RBFInterpolator
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
 import threading
 import time
 
@@ -26,6 +28,19 @@ class MainNode(Node):
 
         # Point correspondences between pairs of cameras (square matrix)
         self.point_correspondences = {value: {v: [] for v in self.possible_values} for value in self.possible_values} # First index is camera with spline, second index is camera with point correspondences. Array contains pairs of corresponding points
+        
+        # Create one image publisher for each possible_value
+
+        self.image_publishers = {}
+        self.cv_bridge = CvBridge()
+        for cam_id in self.possible_values:
+            topic_name = f'/camera_{cam_id}/rectified_image'
+            self.image_publishers[cam_id] = self.create_publisher(Image, topic_name, 10)
+            # Publish a blank image as initialization
+            resolution = self.camera_calibrations[cam_id]['resolution']
+            blank_image = np.ones((resolution[1], resolution[0], 3), dtype=np.uint8) * 255
+            image_msg = self.cv_bridge.cv2_to_imgmsg(blank_image, encoding='bgr8')
+            self.image_publishers[cam_id].publish(image_msg)
 
 
         # Pre-compute rectification maps for all cameras
@@ -48,8 +63,10 @@ class MainNode(Node):
         
         # Configuration
         self.min_points_for_spline = 4
-        self.max_time_gap = .25
+        self.max_time_gap = .5
         self.max_spline_time_span = 0.2
+        self.camera_to_ignore = 3 # Camera 3 is the one with the most noise, so we ignore it for now
+        self.min_correspondences = 40
 
         self.detection_sub = self.create_subscription(
             Float32MultiArray,
@@ -63,19 +80,38 @@ class MainNode(Node):
             return
             
         element_1 = int(msg.data[1])  # camera_id
+        
+        # if element_1 != 5 and element_1 != 4:
+        #     return
+        
         if element_1 not in self.data_lists:
             self.get_logger().warn(f'Value {element_1} not in possible values')
             return
         
-        if 20000 < msg.data[0] < 20010:
-            self.plotall()
+        if 330 < msg.data[0] < 331:
+            threading.Thread(target=self.plotall, daemon=True).start()
 
         # Create raw data point
-        raw_point = (msg.data[0]/59.940060, msg.data[1], msg.data[2], msg.data[3])
+        raw_point = (msg.data[0], msg.data[1], msg.data[2], msg.data[3])
         
         # Rectify the point immediately upon arrival
         rectified_coords = self.rectify_point_polynomial(element_1, (msg.data[2], msg.data[3]))
         rectified_point = (raw_point[0], raw_point[1], rectified_coords[0], rectified_coords[1])
+        
+        # Publish the rectified image for this camera with a white dot at the rectified point
+        if element_1 in self.image_publishers:
+            # Create a black image with the camera resolution
+            resolution = self.camera_calibrations[element_1]['resolution']
+            image = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
+            # Draw a white dot at the rectified point
+            cv.circle(image, (int(rectified_coords[0]), int(rectified_coords[1])), 5, (255, 255, 255), -1)
+            # Convert to ROS Image message
+            image_msg = self.cv_bridge.cv2_to_imgmsg(image, encoding='bgr8')
+            # Publish the image
+            self.image_publishers[element_1].publish(image_msg)
+        else:
+            self.get_logger().warn(f'No publisher for camera {element_1} - skipping image publishing')
+        
         
         # First detection from this camera
         if len(self.data_lists[element_1]) == 0:
@@ -128,13 +164,12 @@ class MainNode(Node):
                                         self.point_correspondences[element_1][other_camera].append((spline_point, (point[2], point[3])))
                                         
                             # Try computing the Fundamental matrix 
-                            if len(self.point_correspondences[element_1][other_camera]) > 10:
+                            if len(self.point_correspondences[element_1][other_camera]) > self.min_correspondences and other_camera != self.camera_to_ignore and element_1 != self.camera_to_ignore:
                                 
                                 spline_points = np.array([p[0] for p in self.point_correspondences[element_1][other_camera]], dtype=np.float32)
                                 other_points = np.array([p[1] for p in self.point_correspondences[element_1][other_camera]], dtype=np.float32)
                                 
-                                
-                                F, mask = cv.findFundamentalMat(spline_points, other_points, cv.RANSAC, 0.1, 0.99)
+                                F, mask = cv.findFundamentalMat(spline_points, other_points, cv.RANSAC, 4.0, 0.99)
                                 
                                 self.get_logger().info(f'Inliers found: {np.sum(mask)} over {len(mask)} points between cameras {element_1} and {other_camera}')
                     threading.Thread(
@@ -167,7 +202,6 @@ class MainNode(Node):
                 ).reshape(-1, 2)
                 
                 # Fit polynomial mapping from distorted to undistorted coordinates
-                from scipy.interpolate import RBFInterpolator
                 
                 # Use RBF for smooth interpolation (alternative: griddata)
                 rbf_x = RBFInterpolator(distorted_points, undistorted_points[:, 0], 
