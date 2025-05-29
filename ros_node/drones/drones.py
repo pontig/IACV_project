@@ -41,14 +41,14 @@ class MainNode(Node):
 
         # Store raw and rectified data points for each camera
         self.data_lists = {value: [] for value in self.possible_values}
-        self.rectified_data_lists = {value: [] for value in self.possible_values}
-        
+        self.rectified_data_lists = {value: [[]] for value in self.possible_values}
+
         # Store ALL splines for each camera
         self.splines = {value: [] for value in self.possible_values} # Each spline is a tuple (spline_x, spline_y, time_points, data_indices)
         
         # Configuration
         self.min_points_for_spline = 4
-        self.max_time_gap = 0.1
+        self.max_time_gap = .25
         self.max_spline_time_span = 0.2
 
         self.detection_sub = self.create_subscription(
@@ -58,24 +58,91 @@ class MainNode(Node):
             10
         )
 
-    def _precompute_rectification_maps(self):
-        """Pre-compute rectification maps for all cameras - most efficient for dense rectification"""
-        for camera_id, calib in self.camera_calibrations.items():
-            if camera_id in self.possible_values:
-                K = np.array(calib['K-matrix'])
-                D = np.array(calib['distCoeff'])
-                resolution = calib['resolution']  # (width, height)
+    def listener_callback(self, msg):
+        if len(msg.data) < 4:
+            return
+            
+        element_1 = int(msg.data[1])  # camera_id
+        if element_1 not in self.data_lists:
+            self.get_logger().warn(f'Value {element_1} not in possible values')
+            return
+        
+        if 20000 < msg.data[0] < 20010:
+            self.plotall()
+
+        # Create raw data point
+        raw_point = (msg.data[0]/59.940060, msg.data[1], msg.data[2], msg.data[3])
+        
+        # Rectify the point immediately upon arrival
+        rectified_coords = self.rectify_point_polynomial(element_1, (msg.data[2], msg.data[3]))
+        rectified_point = (raw_point[0], raw_point[1], rectified_coords[0], rectified_coords[1])
+        
+        # First detection from this camera
+        if len(self.data_lists[element_1]) == 0:
+            self.compiled_cameras += 1
+            self.get_logger().info(f'New camera detected: {element_1}')
+        
+        # Store both raw and rectified data
+        # Store both raw and rectified data
+        self.data_lists[element_1].append(raw_point)
+        
+        # Check if we need to start a new time group
+        current_camera_data = self.rectified_data_lists[element_1]
+        
+        # If the current camera has no data yet, or if the last group is empty
+        if not current_camera_data or not current_camera_data[-1]:
+            current_camera_data[-1].append(rectified_point)
+        else:
+            # Compare timestamps (index 0) to decide if points are close in time
+            last_timestamp = current_camera_data[-1][-1][0]  # timestamp of last point in last group
+            current_timestamp = rectified_point[0]
+            
+            # If timestamps are close (within your threshold), add to current group
+            if abs(current_timestamp - last_timestamp) < self.max_time_gap:
+                current_camera_data[-1].append(rectified_point)
+            else:
+                # Start a new time group
+                points = current_camera_data[-1]
+                current_camera_data.append([rectified_point])
+                # Create a new spline
                 
-                # Compute optimal camera matrix for rectification
-                new_K, roi = cv.getOptimalNewCameraMatrix(K, D, resolution, 1, resolution)
-                
-                # Pre-compute rectification maps
-                map1, map2 = cv.initUndistortRectifyMap(K, D, None, new_K, resolution, cv.CV_32FC1)
-                
-                self.rectification_maps[camera_id] = (map1, map2)
-                self.rectified_camera_matrices[camera_id] = new_K
-                
-                self.get_logger().info(f'Pre-computed rectification maps for camera {camera_id}')
+                if len(points) >= self.min_points_for_spline:
+                    times = [p[0] for p in points]
+                    rectified_x = [p[2] for p in points]  # rectified x
+                    rectified_y = [p[3] for p in points]  # rectified y
+                    spline_x = make_interp_spline(times, rectified_x, k=3)
+                    spline_y = make_interp_spline(times, rectified_y, k=3)
+                    self.splines[element_1].append((spline_x, spline_y, times, list(range(len(points)))))
+                    
+                    # Launch correspondence finding in a separate thread (non-blocking)
+                    def find_correspondences(element_1, times, spline_x, spline_y):
+                        for other_camera in self.possible_values:
+                            if other_camera == element_1 or not self.rectified_data_lists[other_camera]:
+                                continue
+                            for other_points in reversed(self.rectified_data_lists[other_camera]):
+                                for point in reversed(other_points):
+                                    if point[0] < times[0]:
+                                        break
+                                    if times[0] <= point[0] <= times[-1]:
+                                        spline_point = (float(spline_x(point[0])), float(spline_y(point[0])))
+                                        self.point_correspondences[element_1][other_camera].append((spline_point, (point[2], point[3])))
+                                        
+                            # Try computing the Fundamental matrix 
+                            if len(self.point_correspondences[element_1][other_camera]) > 10:
+                                
+                                spline_points = np.array([p[0] for p in self.point_correspondences[element_1][other_camera]], dtype=np.float32)
+                                other_points = np.array([p[1] for p in self.point_correspondences[element_1][other_camera]], dtype=np.float32)
+                                
+                                
+                                F, mask = cv.findFundamentalMat(spline_points, other_points, cv.RANSAC, 0.1, 0.99)
+                                
+                                self.get_logger().info(f'Inliers found: {np.sum(mask)} over {len(mask)} points between cameras {element_1} and {other_camera}')
+                    threading.Thread(
+                        target=find_correspondences,
+                        args=(element_1, times, spline_x, spline_y),
+                        daemon=True
+                    ).start()         
+                            
 
     def _precompute_undistortion_polynomials(self):
         """Pre-compute polynomial approximations for undistortion - faster for sparse points"""
@@ -111,6 +178,25 @@ class MainNode(Node):
                 self.undistortion_polys[camera_id] = (rbf_x, rbf_y)
                 self.get_logger().info(f'Pre-computed undistortion polynomials for camera {camera_id}')
 
+    def _precompute_rectification_maps(self):
+        """Pre-compute rectification maps for all cameras - most efficient for dense rectification"""
+        for camera_id, calib in self.camera_calibrations.items():
+            if camera_id in self.possible_values:
+                K = np.array(calib['K-matrix'])
+                D = np.array(calib['distCoeff'])
+                resolution = calib['resolution']  # (width, height)
+                
+                # Compute optimal camera matrix for rectification
+                new_K, roi = cv.getOptimalNewCameraMatrix(K, D, resolution, 1, resolution)
+                
+                # Pre-compute rectification maps
+                map1, map2 = cv.initUndistortRectifyMap(K, D, None, new_K, resolution, cv.CV_32FC1)
+                
+                self.rectification_maps[camera_id] = (map1, map2)
+                self.rectified_camera_matrices[camera_id] = new_K
+                
+                self.get_logger().info(f'Pre-computed rectification maps for camera {camera_id}')
+                
     def rectify_point_fast(self, camera_id, point):
         """Fastest rectification method using pre-computed maps"""
         if camera_id not in self.rectification_maps:
@@ -146,7 +232,7 @@ class MainNode(Node):
         rectified_y = bilinear_interp(map2, x_int, y_int, x_frac, y_frac)
         
         return (rectified_x, rectified_y)
-
+    
     def rectify_point_polynomial(self, camera_id, point):
         """Alternative rectification using pre-computed polynomials - good for sparse points"""
         if camera_id not in self.undistortion_polys:
@@ -180,195 +266,9 @@ class MainNode(Node):
         
         return (float(rectified_point[0, 0, 0]), float(rectified_point[0, 0, 1]))
 
-    def listener_callback(self, msg):
-        if len(msg.data) < 4:
-            return
-            
-        element_1 = int(msg.data[1])  # camera_id
-        if element_1 not in self.data_lists:
-            self.get_logger().warn(f'Value {element_1} not in possible values')
-            return
-        
-        if 20000 < msg.data[0] < 20010:
-            self.plotall()
-
-        # Create raw data point
-        raw_point = (msg.data[0]/59.940060, msg.data[1], msg.data[2], msg.data[3])
-        
-        # Rectify the point immediately upon arrival
-        rectified_coords = self.rectify_point_polynomial(element_1, (msg.data[2], msg.data[3]))
-        rectified_point = (raw_point[0], raw_point[1], rectified_coords[0], rectified_coords[1])
-        
-        # First detection from this camera
-        if len(self.data_lists[element_1]) == 0:
-            self.compiled_cameras += 1
-            self.get_logger().info(f'New camera detected: {element_1}')
-        
-        # Store both raw and rectified data
-        self.data_lists[element_1].append(raw_point)
-        self.rectified_data_lists[element_1].append(rectified_point)
-        
-        # Process splines using rectified coordinates
-        threading.Thread(target=self._process_new_point, args=(element_1, rectified_point), daemon=True).start()
-        
-        if self.mode == "CALIBRATION":
-        
-            for main_camera in self.point_correspondences:
-                for other_camera in self.point_correspondences[main_camera]:
-                    if other_camera == element_1:
-                        continue
-                    if len(self.point_correspondences[main_camera][other_camera]) > 1000:
-                        # self.get_logger().warn(f'Point correspondences for {main_camera} and {other_camera} exceeded 1000 points, consider clearing or optimizing')
-                        if main_camera != 3 and other_camera != 3:
-                            pts_main = np.array([p[0][2:4] for p in self.point_correspondences[main_camera][other_camera]], dtype=np.float32)
-                            pts_secondary = np.array([p[1] for p in self.point_correspondences[main_camera][other_camera]], dtype=np.float32)
-                            
-                            F, mask = cv.findFundamentalMat(pts_main, pts_secondary, cv.FM_RANSAC, 0.1, 0.99)
-                            E = self.rectified_camera_matrices[main_camera].T @ F @ self.rectified_camera_matrices[other_camera]
-                            
-                            
-                            self.get_logger().info(f'Fundamental matrix found between cameras {main_camera} and {other_camera}: {F}')
-                            
-                            pts_main_normalized = cv.undistortPoints(pts_main, self.rectified_camera_matrices[main_camera], None)
-                            pts_secondary_normalized = cv.undistortPoints(pts_secondary, self.rectified_camera_matrices[other_camera], None)
-                            
-                            self.get_logger().info(f'Inliers found: {np.sum(mask)} over {len(mask)} points')
-                            _, R, t, mask, triangulated_points = cv.recoverPose(E, pts_main_normalized, pts_secondary_normalized, 
-                                                                                cameraMatrix=np.eye(3),
-                                                                                distanceThresh=100.0)
-                            
-                            self.get_logger().info(f'Inliers found: {np.sum(mask)/255} over {len(mask)} points')
-                            if np.sum(mask)/len(mask) < 0.5:
-                                self.get_logger().warn(f'Insufficient inliers found between cameras {main_camera} and {other_camera}: {np.sum(mask)/len(mask)}')
-                            #     continue
-                            # self.mode = "TRACKING"
-
-    def _process_new_point(self, camera_id, new_point):
-        """Process new rectified point for spline creation/update"""
-        rectified_points = self.rectified_data_lists[camera_id]
-        current_time = new_point[0]
-        
-        if len(rectified_points) < self.min_points_for_spline:
-            return
-        
-        # Check if we can update the most recent spline
-        if self.splines[camera_id]:
-            last_spline_info = self.splines[camera_id][-1]
-            last_spline_time = last_spline_info[2][-1]
-            
-            if current_time - last_spline_time < self.max_time_gap:
-                self._update_current_spline(camera_id, rectified_points)
-                return
-        
-        self._try_create_new_spline(camera_id, rectified_points)
-
-    def _update_current_spline(self, camera_id, data_points):
-        """Update the most recent spline with new rectified point"""
-        if not self.splines[camera_id]:
-            return
-            
-        spline_x, spline_y, time_points, data_indices = self.splines[camera_id][-1]
-        new_data_index = len(data_points) - 1
-        updated_indices = data_indices + [new_data_index]
-        spline_points = [data_points[i] for i in updated_indices]
-        
-        try:
-            t = [p[0] for p in spline_points]
-            x = [p[2] for p in spline_points]  # rectified x
-            y = [p[3] for p in spline_points]  # rectified y
-            
-            if len(set(t)) >= self.min_points_for_spline:
-                k = min(3, len(t) - 1)
-                new_spline_x = make_interp_spline(t, x, k=k)
-                new_spline_y = make_interp_spline(t, y, k=k)
-                self.splines[camera_id][-1] = (new_spline_x, new_spline_y, t, updated_indices)
-                # NEW: Find correspondences after updating spline
-                self._find_correspondences_for_spline(camera_id, len(self.splines[camera_id]) - 1)
-                
-        except Exception as e:
-            self.get_logger().warn(f'Failed to update spline for camera {camera_id}: {e}')
-            self._try_create_new_spline(camera_id, data_points)
-
-    def _try_create_new_spline(self, camera_id, data_points):
-        """Create new spline using rectified points"""
-        recent_count = min(self.min_points_for_spline, len(data_points))
-        recent_points = data_points[-recent_count:]
-        recent_indices = list(range(len(data_points) - recent_count, len(data_points)))
-        
-        time_span = recent_points[-1][0] - recent_points[0][0]
-        if time_span > self.max_spline_time_span:
-            for i in range(len(recent_points) - self.min_points_for_spline + 1):
-                subset_points = recent_points[i:]
-                subset_indices = recent_indices[i:]
-                subset_time_span = subset_points[-1][0] - subset_points[0][0]
-                
-                if subset_time_span <= self.max_spline_time_span and len(subset_points) >= self.min_points_for_spline:
-                    recent_points = subset_points
-                    recent_indices = subset_indices
-                    break
-            else:
-                return
-        
-        try:
-            t = [p[0] for p in recent_points]
-            x = [p[2] for p in recent_points]  # rectified x
-            y = [p[3] for p in recent_points]  # rectified y
-            
-            if len(set(t)) >= self.min_points_for_spline:
-                k = min(3, len(t) - 1)
-                spline_x = make_interp_spline(t, x, k=k)
-                spline_y = make_interp_spline(t, y, k=k)
-                self.splines[camera_id].append((spline_x, spline_y, t, recent_indices))
-                self._find_correspondences_for_spline(camera_id, len(self.splines[camera_id]) - 1)
-                
-        except Exception as e:
-            self.get_logger().warn(f'Failed to create new spline for camera {camera_id}: {e}')
-
-    def _find_correspondences_for_spline(self, spline_camera_id, spline_index):
-        """Find point correspondences for a specific spline in other cameras' data"""
-        if spline_index >= len(self.splines[spline_camera_id]):
-            return
-            
-        spline_x, spline_y, time_points, data_indices = self.splines[spline_camera_id][spline_index]
-        spline_start_time = min(time_points)
-        spline_end_time = max(time_points)
-        
-        # Search in all other cameras
-        for other_camera_id in self.possible_values:
-            if other_camera_id == spline_camera_id or other_camera_id not in self.rectified_data_lists:
-                continue
-                
-            other_camera_data = self.rectified_data_lists[other_camera_id]
-            
-            # Find points within the spline's time range
-            for point in other_camera_data:
-                point_time = point[0]
-                if spline_start_time <= point_time <= spline_end_time:
-                    # Evaluate the spline at the point's time
-                    spline_point = (spline_x(point_time), spline_y(point_time))
-                    
-                    # Check if this correspondence already exists to avoid duplicates
-                    if not self._correspondence_exists(other_camera_id, spline_camera_id, point, spline_point):
-                        self.point_correspondences[other_camera_id][spline_camera_id].append((point, spline_point))
-                        self.get_logger().info(f'Point correspondence length: {len(self.point_correspondences[other_camera_id][spline_camera_id])} between cameras {other_camera_id} and {spline_camera_id}')
-                                               
-    def _correspondence_exists(self, camera_id, spline_camera_id, point, spline_point):
-        """Check if a correspondence already exists to avoid duplicates"""
-        existing_correspondences = self.point_correspondences[camera_id][spline_camera_id]
-        
-        # Check for duplicate based on time and position (with small tolerance for floating point comparison)
-        tolerance = 1e-6
-        for existing_pair in existing_correspondences:
-            existing_point, existing_spline_point = existing_pair
-            if (abs(existing_point[0] - point[0]) < tolerance and  # time
-                abs(existing_point[2] - point[2]) < tolerance and  # rectified x
-                abs(existing_point[3] - point[3]) < tolerance and  # rectified y
-                abs(existing_spline_point[0] - spline_point[0]) < tolerance and  # spline x
-                abs(existing_spline_point[1] - spline_point[1]) < tolerance):    # spline y
-                return True
-        return False
     
     def plotall(self):
+        
         for camera_id, splines in self.splines.items():
             plt.figure(figsize=(19, 10))
             plt.title(f'Splines for Camera {camera_id}')
@@ -383,79 +283,19 @@ class MainNode(Node):
         for camera_id, data_points in self.rectified_data_lists.items():
             plt.figure(figsize=(19, 10))
             plt.title(f'Rectified Points for Camera {camera_id}')
-            x_coords = [p[2] for p in data_points]
-            y_coords = [-p[3] for p in data_points]
-            plt.scatter(x_coords, y_coords, s=1, label='Rectified Points')
+            
+            for group in data_points:
+                if not group:
+                    continue
+                x_coords = [p[2] for p in group]
+                y_coords = [-p[3] for p in group]
+                plt.scatter(x_coords, y_coords, s=1, label=f'Group {data_points.index(group)}')
+            
             plt.xlabel('Rectified X')
             plt.ylabel('Rectified Y')
             plt.xlim(0, self.camera_calibrations[camera_id]['resolution'][0])
             plt.ylim(-self.camera_calibrations[camera_id]['resolution'][1], 0)
             plt.savefig(f'scatter_camera_{camera_id}.png')
-
-    def _try_create_new_spline(self, camera_id, data_points):
-        """Create new spline using rectified points"""
-        recent_count = min(self.min_points_for_spline, len(data_points))
-        recent_points = data_points[-recent_count:]
-        recent_indices = list(range(len(data_points) - recent_count, len(data_points)))
-        
-        time_span = recent_points[-1][0] - recent_points[0][0]
-        if time_span > self.max_spline_time_span:
-            for i in range(len(recent_points) - self.min_points_for_spline + 1):
-                subset_points = recent_points[i:]
-                subset_indices = recent_indices[i:]
-                subset_time_span = subset_points[-1][0] - subset_points[0][0]
-                
-                if subset_time_span <= self.max_spline_time_span and len(subset_points) >= self.min_points_for_spline:
-                    recent_points = subset_points
-                    recent_indices = subset_indices
-                    break
-            else:
-                return
-        
-        try:
-            t = [p[0] for p in recent_points]
-            x = [p[2] for p in recent_points]  # rectified x
-            y = [p[3] for p in recent_points]  # rectified y
-            
-            if len(set(t)) >= self.min_points_for_spline:
-                k = min(3, len(t) - 1)
-                spline_x = make_interp_spline(t, x, k=k)
-                spline_y = make_interp_spline(t, y, k=k)
-                self.splines[camera_id].append((spline_x, spline_y, t, recent_indices))
-                
-        except Exception as e:
-            self.get_logger().warn(f'Failed to create new spline for camera {camera_id}: {e}')
-
-    def benchmark_rectification_methods(self, camera_id, test_points, iterations=1000):
-        """Benchmark different rectification methods"""
-
-        if camera_id not in self.camera_calibrations:
-            return
-            
-        methods = {
-            'fast_maps': self.rectify_point_fast,
-            'polynomial': self.rectify_point_polynomial,
-            'opencv': self.rectify_point_opencv
-        }
-        
-        results = {}
-        
-        for method_name, method_func in methods.items():
-            start_time = time.time()
-            for _ in range(iterations):
-                for point in test_points:
-                    method_func(camera_id, point)
-            end_time = time.time()
-            
-            total_time = end_time - start_time
-            results[method_name] = {
-                'total_time': total_time,
-                'avg_time_per_point': total_time / (iterations * len(test_points)),
-                'points_per_second': (iterations * len(test_points)) / total_time
-            }
-            
-        return results
-
 
 def main(args=None):
     # Example camera calibration data structure
