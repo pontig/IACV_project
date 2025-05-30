@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+import std_msgs
 from std_msgs.msg import Float32MultiArray
 from scipy.interpolate import make_interp_spline
 import numpy as np
@@ -10,70 +11,139 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import threading
 import time
+from collections import namedtuple
+
+from geometry_msgs.msg import TransformStamped
+from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
+import sensor_msgs_py.point_cloud2 as pc2
 
 import matplotlib
+from sensor_msgs.msg import PointCloud2, PointField
+from scipy.spatial.transform import Rotation as Rot
 matplotlib.use('Agg')  # Use non-GUI backend for matplotlib
 
 class MainNode(Node):
     def __init__(self, camera_calibrations):
         super().__init__('detections_subscriber')
         
-        self.compiled_cameras = 0
+        # PARAMETERS
+        self.min_points_for_spline = 4
+        self.max_time_gap = .5
+        self.max_spline_time_span = 0.2
+        self.cameras_to_ignore = [3, 0] # Camera 3 is the one with the most noise, so we ignore it for now
+        self.min_correspondences = 500
+        self.min_accettable_f = 0.8
         self.possible_values = range(0, 7)
         self.mode = "CALIBRATION"  
 
-        # Store camera calibration data
-        # Expected format: [{'camera_id': 0, 'K-matrix': K, 'distCoeff': D, 'resolution': (w,h), ...}, ...]
+        # ATTRIBUTES INITIALIZATION
         self.camera_calibrations = {cam['camera_id']: cam for cam in camera_calibrations}
-
-        # Point correspondences between pairs of cameras (square matrix)
         self.point_correspondences = {value: {v: [] for v in self.possible_values} for value in self.possible_values} # First index is camera with spline, second index is camera with point correspondences. Array contains pairs of corresponding points
+        self.data_lists = {value: [] for value in self.possible_values} # TODO: remove this, we only need rectified data
+        self.rectified_data_lists = {value: [[]] for value in self.possible_values}
+        self.splines = {value: [] for value in self.possible_values} # Each spline is a tuple (spline_x, spline_y, time_points, data_indices)
         
-        # Create one image publisher for each possible_value
-
+        # PUBLISHERS AND SUBSCRIBERS
+        self.tf_broadcaster = StaticTransformBroadcaster(self)
+        
         self.image_publishers = {}
+        self.live_detections = {}
         self.cv_bridge = CvBridge()
         for cam_id in self.possible_values:
             topic_name = f'/camera_{cam_id}/rectified_image'
             self.image_publishers[cam_id] = self.create_publisher(Image, topic_name, 10)
-            # Publish a blank image as initialization
             resolution = self.camera_calibrations[cam_id]['resolution']
+            self.live_detections[cam_id] = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)  # Initialize with zeros
             blank_image = np.ones((resolution[1], resolution[0], 3), dtype=np.uint8) * 255
             image_msg = self.cv_bridge.cv2_to_imgmsg(blank_image, encoding='bgr8')
             self.image_publishers[cam_id].publish(image_msg)
 
+        self.pointcloud_publisher = self.create_publisher(PointCloud2, '/live_trajectory', 10)
+
+        self.detection_sub = self.create_subscription(Float32MultiArray,'/detections',self.listener_callback,10)
 
         # Pre-compute rectification maps for all cameras
         self.rectification_maps = {}
         self.rectified_camera_matrices = {}
         self._precompute_rectification_maps()
-
         # Alternative: Pre-compute inverse distortion polynomials (faster for sparse points)
-        self.use_polynomial_undistortion = True
-        self.undistortion_polys = {}
-        if self.use_polynomial_undistortion:
-            self._precompute_undistortion_polynomials()
+        # self.use_polynomial_undistortion = True
+        # self.undistortion_polys = {}
+        # if self.use_polynomial_undistortion:
+        #     self._precompute_undistortion_polynomials()
 
-        # Store raw and rectified data points for each camera
-        self.data_lists = {value: [] for value in self.possible_values}
-        self.rectified_data_lists = {value: [[]] for value in self.possible_values}
-
-        # Store ALL splines for each camera
-        self.splines = {value: [] for value in self.possible_values} # Each spline is a tuple (spline_x, spline_y, time_points, data_indices)
+        # RESET RVIZ
+        for value in self.possible_values:
+            self.sendTfStaticTransform(value, np.zeros(3), np.eye(3)) 
+        self.publish_pointcloud([])
         
-        # Configuration
-        self.min_points_for_spline = 4
-        self.max_time_gap = .5
-        self.max_spline_time_span = 0.2
-        self.camera_to_ignore = 3 # Camera 3 is the one with the most noise, so we ignore it for now
-        self.min_correspondences = 40
-
-        self.detection_sub = self.create_subscription(
-            Float32MultiArray,
-            '/detections',
-            self.listener_callback,
-            10
+    def publish_pointcloud(self, points):
+        """
+        Publish a list of 3D points as a PointCloud2 message.
+        :param points: List of (x, y, z) tuples
+        """
+        header = self.get_clock().now().to_msg()
+        pc_header = self.get_clock().now().to_msg()
+        msg = pc2.create_cloud_xyz32(
+            std_msgs.msg.Header(
+                stamp=self.get_clock().now().to_msg(),
+                frame_id='map'
+            ),
+            points
         )
+        self.pointcloud_publisher.publish(msg)
+        self.get_logger().info("Published cloud")
+        
+    def sendTfStaticTransform(self, camera_id, translation, rotation):
+        """Send a static transform for the camera to the TF2 broadcaster."""
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = 'map'
+        transform.child_frame_id = f'camera_{camera_id}'
+        
+        transform.transform.translation.x = float(translation[0])
+        transform.transform.translation.y = float(translation[1])
+        transform.transform.translation.z = float(translation[2])
+        
+        # Convert rotation from Rodrigues (rotation vector) to quaternion
+        rot_matrix = rotation
+        # Convert rotation matrix to quaternion
+        # OpenCV uses [w, x, y, z] for cv.RQDecomp3x3, but ROS uses [x, y, z, w]
+        # We'll use scipy for conversion
+        quat = Rot.from_matrix(rot_matrix).as_quat()  # [x, y, z, w]
+        transform.transform.rotation.x = quat[0]
+        transform.transform.rotation.y = quat[1]
+        transform.transform.rotation.z = quat[2]
+        transform.transform.rotation.w = quat[3]
+        
+        self.get_logger().info(f"Tf published: camera_{camera_id}")
+        
+        self.tf_broadcaster.sendTransform(transform)
+
+    def to_normalized_camera_coord(self, pts, K, distcoeff):
+        """
+        Convert points from image coordinates to normalized camera coordinates.
+        
+        Parameters:
+        -----------
+        pts : ndarray
+            Points in image coordinates (N x 2)
+        K : ndarray
+            Camera matrix
+        distcoeff : ndarray
+            Distortion coefficients
+        
+        Returns:
+        --------
+        ndarray
+            Points in normalized camera coordinates (N x 2)
+        """
+        pts_normalized = cv.undistortPoints(pts, K, distcoeff)
+        
+        # Convert from homogeneous coordinates to 2D
+        pts_normalized = pts_normalized.reshape(-1, 2)
+        
+        return pts_normalized
 
     def listener_callback(self, msg):
         if len(msg.data) < 4:
@@ -95,31 +165,27 @@ class MainNode(Node):
         raw_point = (msg.data[0], msg.data[1], msg.data[2], msg.data[3])
         
         # Rectify the point immediately upon arrival
-        rectified_coords = self.rectify_point_polynomial(element_1, (msg.data[2], msg.data[3]))
-        rectified_point = (raw_point[0], raw_point[1], rectified_coords[0], rectified_coords[1])
+        # rectified_coords = self.rectify_point_polynomial(element_1, (msg.data[2], msg.data[3]))
+        # rectified_point = (raw_point[0], raw_point[1], rectified_coords[0], rectified_coords[1])
+        rectified_point = raw_point
         
         # Publish the rectified image for this camera with a white dot at the rectified point
         if element_1 in self.image_publishers:
-            # Create a black image with the camera resolution
-            resolution = self.camera_calibrations[element_1]['resolution']
-            image = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
-            # Draw a white dot at the rectified point
-            cv.circle(image, (int(rectified_coords[0]), int(rectified_coords[1])), 5, (255, 255, 255), -1)
+            image = self.live_detections[element_1].copy()
+            cv.circle(image, (int(rectified_point[2]), int(rectified_point[3])), 5, (255, 255, 255), -1)
             # Convert to ROS Image message
             image_msg = self.cv_bridge.cv2_to_imgmsg(image, encoding='bgr8')
             # Publish the image
             self.image_publishers[element_1].publish(image_msg)
+            self.live_detections[element_1] = image  # Update the live image for this camera
         else:
             self.get_logger().warn(f'No publisher for camera {element_1} - skipping image publishing')
         
         
         # First detection from this camera
         if len(self.data_lists[element_1]) == 0:
-            self.compiled_cameras += 1
             self.get_logger().info(f'New camera detected: {element_1}')
         
-        # Store both raw and rectified data
-        # Store both raw and rectified data
         self.data_lists[element_1].append(raw_point)
         
         # Check if we need to start a new time group
@@ -140,8 +206,8 @@ class MainNode(Node):
                 # Start a new time group
                 points = current_camera_data[-1]
                 current_camera_data.append([rectified_point])
-                # Create a new spline
                 
+                # Create a new spline
                 if len(points) >= self.min_points_for_spline:
                     times = [p[0] for p in points]
                     rectified_x = [p[2] for p in points]  # rectified x
@@ -150,7 +216,6 @@ class MainNode(Node):
                     spline_y = make_interp_spline(times, rectified_y, k=3)
                     self.splines[element_1].append((spline_x, spline_y, times, list(range(len(points)))))
                     
-                    # Launch correspondence finding in a separate thread (non-blocking)
                     def find_correspondences(element_1, times, spline_x, spline_y):
                         for other_camera in self.possible_values:
                             if other_camera == element_1 or not self.rectified_data_lists[other_camera]:
@@ -164,19 +229,73 @@ class MainNode(Node):
                                         self.point_correspondences[element_1][other_camera].append((spline_point, (point[2], point[3])))
                                         
                             # Try computing the Fundamental matrix 
-                            if len(self.point_correspondences[element_1][other_camera]) > self.min_correspondences and other_camera != self.camera_to_ignore and element_1 != self.camera_to_ignore:
+                            if self.mode == "CALIBRATION" and len(self.point_correspondences[element_1][other_camera]) > self.min_correspondences and other_camera not in self.cameras_to_ignore and element_1 not in self.cameras_to_ignore:
                                 
                                 spline_points = np.array([p[0] for p in self.point_correspondences[element_1][other_camera]], dtype=np.float32)
                                 other_points = np.array([p[1] for p in self.point_correspondences[element_1][other_camera]], dtype=np.float32)
                                 
-                                F, mask = cv.findFundamentalMat(spline_points, other_points, cv.RANSAC, 4.0, 0.99)
+                                K1 = self.rectified_camera_matrices[element_1] 
+                                K2 = self.rectified_camera_matrices[other_camera]
                                 
-                                self.get_logger().info(f'Inliers found: {np.sum(mask)} over {len(mask)} points between cameras {element_1} and {other_camera}')
-                    threading.Thread(
-                        target=find_correspondences,
-                        args=(element_1, times, spline_x, spline_y),
-                        daemon=True
-                    ).start()         
+                                # Find Fundamental Matrix
+                                F, mask = cv.findFundamentalMat(spline_points, other_points, cv.RANSAC)
+                                
+                                if F is not None and np.sum(mask) / len(mask) > self.min_accettable_f:
+                                    self.mode = "TRACKING"                                    
+                                    self.get_logger().info(f'Found valid Fundamental matrix between cameras {element_1} and {other_camera} with {len(mask)} correspondences')
+                                    
+                                    # Convert to Essential Matrix
+                                    E = K2.T @ F @ K1
+                                    
+                                    # Normalize points for pose recovery
+                                    pts1_norm = self.to_normalized_camera_coord(spline_points, K1, np.zeros(5))
+                                    pts2_norm = self.to_normalized_camera_coord(other_points, K2, np.zeros(5))
+
+                                    # Recover pose using normalized points
+                                    _, R, t, pose_mask = cv.recoverPose(E, pts1_norm, pts2_norm)
+                                    
+                                    # Create projection matrices for triangulation
+                                    P1 = K1 @ np.hstack([np.eye(3), np.zeros((3, 1))])
+                                    P2 = K2 @ np.hstack([R, t.reshape(-1, 1)])
+                                    
+                                    # Triangulate using ORIGINAL image coordinates (not normalized)
+                                    points_4d = cv.triangulatePoints(P1, P2, spline_points.T, other_points.T)
+                                    points_3d = (points_4d[:3] / points_4d[3]).T
+                                    triangulated_points = points_3d
+                                    
+                                    CameraInfo = namedtuple('CameraInfo', ['K_matrix', 'distCoeff', 'resolution'])
+                                    camera_info_1 = CameraInfo(
+                                        K_matrix=self.rectified_camera_matrices[element_1],
+                                        distCoeff=np.zeros(5),  # Assuming no distortion for rectified points
+                                        resolution=self.camera_calibrations[element_1]['resolution']
+                                    )
+                                    camera_info_2 = CameraInfo(
+                                        K_matrix=self.rectified_camera_matrices[other_camera],
+                                        distCoeff=np.zeros(5),  # Assuming no distortion for rectified points
+                                        resolution=self.camera_calibrations[other_camera]['resolution']
+                                    )
+                                    
+                                    self.plot_reprojection_analysis(
+                                        triangulated_points, spline_points, 
+                                        np.eye(3), np.zeros(3),
+                                        camera_info_1, element_1, "Reprojection Analysis for Camera {element_1}")
+                                    self.plot_reprojection_analysis(
+                                        triangulated_points, other_points, 
+                                        R, t,
+                                        camera_info_2, other_camera, "Reprojection Analysis for Camera {other_camera}")
+                                    
+                                    self.sendTfStaticTransform(element_1, np.zeros(3), np.eye(3))  # Send static transform for the current camera with zero Rodrigues rotation
+                                    self.sendTfStaticTransform(other_camera, t, R)
+                                    
+                                    self.publish_pointcloud(triangulated_points)
+                                    
+                    
+                    if self.mode == "CALIBRATION":
+                        threading.Thread(
+                            target=find_correspondences,
+                            args=(element_1, times, spline_x, spline_y),
+                            daemon=True
+                        ).start()         
                             
 
     def _precompute_undistortion_polynomials(self):
@@ -224,9 +343,9 @@ class MainNode(Node):
                 new_K, roi = cv.getOptimalNewCameraMatrix(K, D, resolution, 1, resolution)
                 
                 # Pre-compute rectification maps
-                map1, map2 = cv.initUndistortRectifyMap(K, D, None, new_K, resolution, cv.CV_32FC1)
+                # map1, map2 = cv.initUndistortRectifyMap(K, D, None, new_K, resolution, cv.CV_32FC1)
                 
-                self.rectification_maps[camera_id] = (map1, map2)
+                # self.rectification_maps[camera_id] = (map1, map2)
                 self.rectified_camera_matrices[camera_id] = new_K
                 
                 self.get_logger().info(f'Pre-computed rectification maps for camera {camera_id}')
@@ -299,7 +418,6 @@ class MainNode(Node):
         rectified_point = cv.undistortPoints(point_array, K, D, None, K)
         
         return (float(rectified_point[0, 0, 0]), float(rectified_point[0, 0, 1]))
-
     
     def plotall(self):
         
@@ -330,6 +448,38 @@ class MainNode(Node):
             plt.xlim(0, self.camera_calibrations[camera_id]['resolution'][0])
             plt.ylim(-self.camera_calibrations[camera_id]['resolution'][1], 0)
             plt.savefig(f'scatter_camera_{camera_id}.png')
+    
+    def plot_reprojection_analysis(
+        self, points_3d, original_points_2d, 
+        R, t, camera_info, camera_id, title=None):
+        """Plot reprojected 2D points for a single camera."""
+        # Reproject points        
+        reprojected_points, _ = cv.projectPoints(
+            points_3d, R, t,
+            camera_info.K_matrix, camera_info.distCoeff
+        )
+        reprojected_points = reprojected_points.reshape(-1, 2)
+
+        plt.figure(figsize=(19, 10))
+        plt.title(f"Reprojection Analysis for Camera {camera_id}")
+        if title:
+            plt.title(title)
+        # Plot reprojected points
+        plt.scatter(reprojected_points[:, 0], -reprojected_points[:, 1], c='r', label='Reprojected Points', s=1)
+        plt.scatter(
+            original_points_2d[:, 0], -original_points_2d[:, 1],
+            c='b', label='Original Points', alpha=0.5, s=1
+        )
+        plt.xlabel("X")
+        plt.ylabel("Y")
+        plt.legend()
+        plt.xlim(0, camera_info.resolution[0])
+        plt.ylim(-camera_info.resolution[1], 0)
+
+        plt.tight_layout()
+        plt.savefig(f"reprojection_analysis_camera_{camera_id}.png")
+        self.get_logger().info(f"Reprojection analysis saved for camera {camera_id}")
+
 
 def main(args=None):
     # Example camera calibration data structure
