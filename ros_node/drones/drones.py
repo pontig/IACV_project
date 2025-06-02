@@ -247,7 +247,7 @@ class MainNode(Node):
                             self.trajectory.append(avg_triangulated_point)
                             self.trajectory_timestamps.append(raw_point[0])
                             self.publish_pointcloud(self.trajectory)
-            if self.message_count % 100 == 0:
+            if self.message_count % 300 == 0:
                 self.get_logger().info(f'Here {self.message_count}')
                 self.compute_3d_splines()
                             
@@ -404,6 +404,9 @@ class MainNode(Node):
         points_3d_with_timestamps = points_3d_with_timestamps.T  # Shape (N, 4) where N is number of points
         splines_3d_points = []
         this_spline = []
+        
+        for t in points_3d_with_timestamps:
+            self.get_logger().info(f"t= {t[3]}")
 
         if len(points_3d_with_timestamps) == 0:
             # Handle empty case appropriately
@@ -429,15 +432,19 @@ class MainNode(Node):
 
         splines_3d = []
         for spline_points in splines_3d_points:
-            spline_points = np.array(spline_points)[::-1]
-            ts = spline_points[:, 3]  # Use timestamps from triangulated points
+            spline_points_i = np.array(spline_points)
+            ts = spline_points_i[:, 3]
+            if not np.all(np.diff(ts) > 0):
+                spline_points_i = spline_points_i[::-1]
+            ts = spline_points_i[:, 3]  # Use timestamps from triangulated points
+
             
             if len(ts) < self.min_points_for_spline:  # Use consistent variable name
                 continue  # Skip if not enough points for spline fitting
             
-            spline_x = make_interp_spline(ts, spline_points[:, 0], k=3)
-            spline_y = make_interp_spline(ts, spline_points[:, 1], k=3)
-            spline_z = make_interp_spline(ts, spline_points[:, 2], k=3)
+            spline_x = make_interp_spline(ts, spline_points_i[:, 0], k=3)
+            spline_y = make_interp_spline(ts, spline_points_i[:, 1], k=3)
+            spline_z = make_interp_spline(ts, spline_points_i[:, 2], k=3)
             
             splines_3d.append((spline_x, spline_y, spline_z, ts))  
         
