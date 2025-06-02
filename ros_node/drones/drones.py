@@ -12,6 +12,7 @@ from cv_bridge import CvBridge
 import threading
 import time
 from collections import namedtuple
+from scipy.optimize import least_squares
 
 from geometry_msgs.msg import TransformStamped
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
@@ -35,6 +36,7 @@ class MainNode(Node):
         self.possible_values = range(0, 7)
         self.mode = "CALIBRATION"  
         self.message_count = 0
+        self.points_to_rviz = 100000
 
         # ATTRIBUTES INITIALIZATION
         self.camera_calibrations = {cam['camera_id']: cam for cam in camera_calibrations}
@@ -85,14 +87,18 @@ class MainNode(Node):
         Publish a list of 3D points as a PointCloud2 message.
         :param points: List of (x, y, z) tuples
         """
-        header = self.get_clock().now().to_msg()
-        pc_header = self.get_clock().now().to_msg()
+        # Only publish the last points if the list is longer
+        if len(points) > self.points_to_rviz:
+            points_to_publish = points[-self.points_to_rviz:]
+        else:
+            points_to_publish = points
+
         msg = pc2.create_cloud_xyz32(
             std_msgs.msg.Header(
                 stamp=self.get_clock().now().to_msg(),
                 frame_id='map'
             ),
-            points
+            points_to_publish
         )
         if publisher is None:
             self.pointcloud_publisher.publish(msg)
@@ -244,13 +250,12 @@ class MainNode(Node):
                                 new_triangulated_points.append((pt[0], pt[1], pt[2]))
                         if new_triangulated_points:
                             avg_triangulated_point = np.mean(new_triangulated_points, axis=0)
-                            self.trajectory.append(avg_triangulated_point)
-                            self.trajectory_timestamps.append(raw_point[0])
+                            if raw_point[0] not in self.trajectory_timestamps:
+                                self.trajectory.append(avg_triangulated_point)
+                                self.trajectory_timestamps.append(raw_point[0])
                             self.publish_pointcloud(self.trajectory)
-            if self.message_count % 300 == 0:
-                self.get_logger().info(f'Here {self.message_count}')
+            if self.message_count % 1000 == 0:
                 self.compute_3d_splines()
-                            
         
         # If the current camera has no data yet, or if the last group is empty
         if not current_camera_data or not current_camera_data[-1]:
@@ -352,7 +357,6 @@ class MainNode(Node):
                     
                     triangulated_timestamps = [p[2] for p in self.point_correspondences[element_1][other_camera]]
                     
-                    CameraInfo = namedtuple('CameraInfo', ['K_matrix', 'distCoeff', 'resolution'])
                     # # Plot some statistics
                     # dx_stamps = np.diff(triangulated_timestamps)
                     # plt.figure(figsize=(19, 10))
@@ -404,9 +408,6 @@ class MainNode(Node):
         points_3d_with_timestamps = points_3d_with_timestamps.T  # Shape (N, 4) where N is number of points
         splines_3d_points = []
         this_spline = []
-        
-        for t in points_3d_with_timestamps:
-            self.get_logger().info(f"t= {t[3]}")
 
         if len(points_3d_with_timestamps) == 0:
             # Handle empty case appropriately
@@ -451,22 +452,41 @@ class MainNode(Node):
         self.get_logger().info(f'Found {len(splines_3d)} 3D splines')
         self.last_3d_spline = splines_3d[-1]                                   
         
-        # # Sample 100 points for each 3D spline and publish as a point cloud
-        # all_sampled_points = []
-        # for spline_x, spline_y, spline_z, ts in splines_3d:
-        #     t_min, t_max = min(ts), max(ts)
-        #     if t_max - t_min < 1e-6:
-        #         continue  # Avoid degenerate splines
-        #     t_samples = np.linspace(t_min, t_max, 100)
-        #     x_samples = spline_x(t_samples)
-        #     y_samples = spline_y(t_samples)
-        #     z_samples = spline_z(t_samples)
-        #     sampled_points = np.stack([x_samples, y_samples, z_samples], axis=1)
-        #     all_sampled_points.extend(sampled_points.tolist())
-        # self.publish_pointcloud(all_sampled_points, self.splines_publisher)
-        
         self.localize_remaining_cameras(splines_3d, CameraInfo=namedtuple('CameraInfo', ['K_matrix', 'distCoeff', 'resolution']))
+        
+        for camera_id in self.localized_cameras:
+            # Send static transforms for all localized cameras
+            tvec, R = self.camera_poses[camera_id]
+
+            def run_bundle_adjustment(camera_id=camera_id, tvec=tvec, R=R):
+                res = self.bundle_adjust_camera_pose(
+                    splines_3d,
+                    self.rectified_data_lists[camera_id], 
+                    self.rectified_camera_matrices[camera_id], 
+                    np.zeros(5),  # Assuming no distortion for rectified points
+                    initial_rvec=cv.Rodrigues(R)[0].flatten(),
+                    initial_tvec=tvec
+                )
+                self.camera_poses[camera_id] = (res['tvec'], res['R'])
+                self.sendTfStaticTransform(camera_id, res['tvec'], res['R'])
+                
+                pts_detected_camera = []
+                for group in self.rectified_data_lists[camera_id]:
+                    for detection in group:
+                        pts_detected_camera.append((detection[2], detection[3], detection[0]))
+                
+                CameraInfo = namedtuple('CameraInfo', ['K_matrix', 'distCoeff', 'resolution'])
+                camera_info = CameraInfo(
+                    K_matrix=self.rectified_camera_matrices[camera_id],
+                    distCoeff=np.zeros(5),  # Assuming no distortion for rectified points
+                    resolution=self.camera_calibrations[camera_id]['resolution']
+                )                
+                self.plot_reprojection_analysis(
+                    splines_3d, pts_detected_camera, res['R'], res['tvec'], camera_info, camera_id, title=f"Reprojection Analysis for Camera {camera_id} after Bundle Adjustment")
                     
+
+            threading.Thread(target=run_bundle_adjustment, daemon=True).start()
+                   
     def localize_remaining_cameras(self, splines_3d, CameraInfo):
         """
         Attempt to localize all cameras that are not yet localized using 3D-2D correspondences and PnP.
@@ -521,13 +541,6 @@ class MainNode(Node):
                         resolution=self.camera_calibrations[camera_id]['resolution']
                     )                                                                                 
 
-                    self.plot_reprojection_analysis(
-                        object_points,
-                        image_points,
-                        R, tvec.flatten(),
-                        camera_info, camera_id                                                            
-                    )
-
                     self.localized_cameras.add(camera_id)
                 else:
                     self.get_logger().warn(f'Discarded pose for camera {camera_id} due to insufficient inliers: {np.sum(inliers) if inliers is not None else 0} / {len(corresp_3d2d_this_camera)}')
@@ -565,10 +578,22 @@ class MainNode(Node):
             plt.savefig(f'scatter_camera_{camera_id}.png')
     
     def plot_reprojection_analysis(
-        self, points_3d, original_points_2d, 
-        R, t, camera_info, camera_id, title=None):
+        self, splines_3d, original_points_2d, 
+        R, t, camera_info, camera_id, title=None
+    ):
         """Plot reprojected 2D points for a single camera."""
-        # Reproject points        
+        # Reproject points
+        
+        points_3d = []
+        
+        for spline in splines_3d:
+            spline_x, spline_y, spline_z, tss = spline
+            timestamps_linspace = tss
+            for tt in timestamps_linspace:
+                points_3d.append([spline_x(tt), spline_y(tt), spline_z(tt)])
+        points_3d = np.array(points_3d)
+        points_3d = points_3d.reshape(-1, 3)
+        
         reprojected_points, _ = cv.projectPoints(
             points_3d, R, t,
             camera_info.K_matrix, camera_info.distCoeff
@@ -579,6 +604,7 @@ class MainNode(Node):
         plt.title(f"Reprojection Analysis for Camera {camera_id}")
         if title:
             plt.title(title)
+
         # Plot reprojected points
         plt.scatter(reprojected_points[:, 0], -reprojected_points[:, 1], c='r', label='Reprojected Points', s=1)
         plt.scatter(
@@ -593,8 +619,162 @@ class MainNode(Node):
 
         plt.tight_layout()
         plt.savefig(f"reprojection_analysis_camera_{camera_id}.png")
-        self.get_logger().info(f"Reprojection analysis saved for camera {camera_id}")
+        
+    def bundle_adjust_camera_pose(self, splines_3d, camera_detections, camera_K, camera_dist_coeffs, 
+                                initial_rvec=None, initial_tvec=None):
+        """
+        Perform bundle adjustment to refine camera pose and optionally spline coefficients.
+        
+        Parameters:
+        -----------
+        splines_3d : list of tuples
+            List of (spline_x, spline_y, spline_z, ts) where each spline_* is a scipy.interpolate.BSpline
+            object and ts is the array of timestamps where the spline is defined
+        
+        camera_detections : ndarray
+            Array of shape (N, 3) where each row is [timestamp, x, y] with timestamp being the global
+            timestamp of the detection and (x, y) being the pixel coordinates of the detection
+        
+        camera_K : ndarray
+            3x3 camera intrinsic matrix
+        
+        camera_dist_coeffs : ndarray
+            Camera distortion coefficients
+        
+        initial_rvec : ndarray, optional
+            Initial rotation vector (Rodrigues format) for the camera pose. If None, assumed as zeros.
+        
+        initial_tvec : ndarray, optional
+            Initial translation vector for the camera pose. If None, assumed as zeros.
+        
+        optimize_splines : bool, optional
+            If True, optimize spline coefficients along with camera pose. Default is False.
+        
+        kinetic_energy_weight : float, optional
+            Weight for the kinetic energy term (velocity regularization). Default is 1.0.
+        
+        smoothness_weight : float, optional
+            Weight for spline smoothness regularization. Default is 0.1.
+        
+        Returns:
+        --------
+        dict
+            Dictionary containing optimized parameters:
+            - 'rvec': Optimized rotation vector
+            - 'tvec': Optimized translation vector
+            - 'R': Optimized rotation matrix
+            - 'reprojection_error': Final mean reprojection error
+            - 'inliers': Number of inliers used in optimization
+            - 'total_points': Total number of correspondences
+            - 'optimized_splines': Optimized splines (if optimize_splines=True)
+        """
+        
+        # Initialize camera pose if not provided
+        if initial_rvec is None:
+            initial_rvec = np.zeros(3)
+        if initial_tvec is None:
+            initial_tvec = np.zeros(3)
+            
+        # Ensure proper shape for rvec
+        if initial_rvec.ndim == 1:
+            initial_rvec = initial_rvec.reshape(3, 1)
+            
+        return self._bundle_adjust_camera_only(splines_3d, camera_detections, camera_K, 
+                                            camera_dist_coeffs, initial_rvec, initial_tvec)
 
+    def _bundle_adjust_camera_only(self, splines_3d, camera_detections, camera_K, camera_dist_coeffs, 
+                                initial_rvec, initial_tvec):
+        
+        # Generate correspondences between 3D points and 2D detections
+        correspondences = []
+        
+        for detection_batch in camera_detections:
+            for detection in detection_batch:
+                global_ts = detection[0]
+                pixel_x, pixel_y = detection[1], detection[2]
+                
+                # Find the appropriate spline for this timestamp
+                for spline_x, spline_y, spline_z, ts in splines_3d:
+                    if np.min(ts) <= global_ts <= np.max(ts):
+                        # Evaluate spline at this timestamp
+                        x3d = float(spline_x(global_ts))
+                        y3d = float(spline_y(global_ts))
+                        z3d = float(spline_z(global_ts))
+                        
+                        correspondences.append({
+                            'point3d': np.array([x3d, y3d, z3d]),
+                            'point2d': np.array([pixel_x, pixel_y]),
+                            'timestamp': global_ts
+                        })
+                        break
+        
+        if not correspondences:
+            raise ValueError("No correspondences found between 3D splines and camera detections")
+        
+        # Define the reprojection error function for optimization
+        def compute_residuals(params):
+            # Extract rotation and translation parameters
+            rvec = params[0:3]
+            tvec = params[3:6]
+            
+            residuals = []
+            for corr in correspondences:
+                # Project 3D point to camera image plane
+                point3d = corr['point3d'].reshape(1, 3)
+                projected_point, _ = cv.projectPoints(point3d, rvec, tvec, camera_K, camera_dist_coeffs)
+                projected_point = projected_point.reshape(-1)
+                
+                # Calculate residual (reprojection error)
+                error = corr['point2d'] - projected_point
+                residuals.extend(error)
+            
+            return np.array(residuals)
+        
+        # Initial parameters (rotation vector and translation vector)
+        initial_params = np.concatenate([initial_rvec.flatten(), initial_tvec.flatten()])
+        
+        # Set optimization boundaries for parameters
+        rvec_bounds = (initial_rvec.flatten() - np.deg2rad(90), initial_rvec.flatten() + np.deg2rad(90))  # +-90 degrees
+        tvec_bounds = (initial_tvec.flatten() - 1, initial_tvec.flatten() + 1)  # +-1 unit
+        bounds = (np.concatenate([rvec_bounds[0], tvec_bounds[0]]),
+                np.concatenate([rvec_bounds[1], tvec_bounds[1]]))
+        
+        # Perform optimization using Levenberg-Marquardt algorithm with bounds
+        self.get_logger().info(f"Starting bundle adjustment with {len(correspondences)} correspondences...")
+        result = least_squares(
+            compute_residuals,
+            initial_params,
+            bounds=bounds,
+            method='trf',  # Trust Region Reflective algorithm supports bounds
+            ftol=1e-8,
+            xtol=1e-8,
+            verbose=0
+        )
+        
+        # Extract optimized parameters
+        optimized_rvec = result.x[0:3]
+        optimized_tvec = result.x[3:6]
+        
+        # Convert rotation vector to rotation matrix
+        optimized_R, _ = cv.Rodrigues(optimized_rvec)
+        
+        # Compute final reprojection error statistics
+        final_residuals = compute_residuals(result.x)
+        residuals_squared = np.square(final_residuals).reshape(-1, 2).sum(axis=1)
+        mean_reprojection_error = np.sqrt(np.mean(residuals_squared))
+        
+        # Count inliers (points with reprojection error below threshold)
+        inlier_threshold = 12.0  # pixels
+        inliers = np.sum(np.sqrt(residuals_squared) < inlier_threshold)
+
+        return {
+            'rvec': optimized_rvec,
+            'tvec': optimized_tvec,
+            'R': optimized_R,
+            'reprojection_error': mean_reprojection_error,
+            'inliers': inliers,
+            'total_points': len(correspondences),
+        }
 
 
 def main(args=None):

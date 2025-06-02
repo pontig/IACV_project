@@ -120,13 +120,14 @@ Due to the limitations of the detection algorithm, we decided to use the drone d
 
 \subsection{Offline Trajectory Reconstruction}
 
-The next step is to reconstruct the drone's trajectory by loading all the detections in memory and then applying the reconstruction algorithm.
+The next step was to reconstruct the drone's trajectory by loading all the detections in memory and then applying the reconstruction algorithm.
 
     {\color{red} data loading con rectification?}
+\label{sec:data_loading}
 
 \subsubsection{Temporal shift estimation}
 
-One of the main goals in the paper is to have a system that does not require any synchronization between the cameras. This means that the timestamps of the frames are not aligned, and we need to find the best temporal shift and scale factor between the cameras to align the drone detections.
+One of the main goals in the paper is to have a system that does not require any synchronization between the cameras. This means that the timestamps of the frames are not aligned, and we needed to find the best temporal shift and scale factor between the cameras to align the drone detections.
 
 following the paper notation, we can label each detection $j$ in each camera $i$ with a timestamp
 
@@ -204,10 +205,56 @@ The bundle adjustment was performed for each registered camera every time a new 
 
 After all cameras were registered, we should have had a complete 3D trajectory of the drone, with all cameras registered in the same global frame and all 3D points visible from at least two cameras. However, the implemented approach suffered from some limitations, that we are going to discuss in section \ref{sec:limitations}.
 
-\subsection{}
+\subsection{Online Trajectory Reconstruction}
 
-\section{Limitations to the implemented approaches}
+The paper also suggest the implementation of an online trajectory reconstruction algorithm, that is able to reconstruct the drone's trajectory in real-time as it flies.
+
+\subsubsection{Environment and data loading}
+
+In this case, we needed to simulate the stream of data from the cameras, as if it were coming from a real-time video feed. To do this, we choose to use ROS2 as the framework to handle the data stream, and we implemented a ROS2 node that receives the drone detections from every camera and reconstructs the trajectory in real-time.
+To simulate a real-time data stream, we performed the following data preprocessing steps:
+\begin{itemize}
+    \item We loaded the drone detections from the CSV file described in Section~\ref{sec:data_loading}.
+    \item For each camera and each detection, we computed the global timestamp by applying the $\alpha$ and $\beta$ parameters provided in the dataset, ensuring robustness to timing inconsistencies.
+    \item We sorted all detections by their global timestamps and created a list of messages to be stored in a ROS2 bag file.
+\end{itemize}
+
+\textbf{Note:} since in this approach we simulated the real-time data stream, we did not need to estimate the temporal shifts between cameras, as the timestamps were already aligned.\\
+
+During the bag replay, all the logic for the trajectory reconstruction was implemented in a single ROS2 node, which subscribed to the drone detections.
+
+\subsubsection{Data handling}
+
+Since the data was received in real time, it was essential to handle the data stream efficiently. To achieve this, we implemented a subscriber that collected drone detections from each camera and stored them in a buffer. The buffer was organized as an array, where each element corresponded to a specific camera and contained a list of detections grouped by contiguous timestamps. This structure enabled fast access to the detections from each camera and made it easy to identify timestamp segments that were ready for spline interpolation without the need for repeatedly searching through the entire buffer.
+
+\subsubsection{Cameras localization}
+
+In order not to lose any incoming message during the trajectory reconstruction, all the logic for the camera localization and trajectory reconstruction was implemented in a separate thread. The tasks to be performed in this thread were the following:
+
+After a sufficient number of detections had been collected in the buffer, the algorithm would find the correspondences between cameras and, if the number of correspondences between two cameras was sufficient, it would compute the fundamental matrix \textit{F}.
+
+If \textit{F} brought to a sufficient number of inliers, the algorithm would compute the essential matrix \textit{E} and recover the relative pose of the two cameras in the same way as in the offline trajectory reconstruction.
+
+After the relative pose of the two cameras was computed, the algorithm would generate the 3D positions of the drone by triangulating the 2D-2D correspondences between the two cameras, and then generate the initial 3D splines for the drone trajectory.
+
+Periodically, the algorithm would check if cameras not yet registered had enough correspondences with the 3D splines. If so, it would compute the relative pose of the new camera with respect to the global frame using the PnP algorithm
+
+\subsubsection{3D Splines extension}
+
+In parallel with the camera localization, the algorithm would also keep up to date the 3D trajectory of the drone in the following way:
+
+\begin{itemize}
+    \item For each new detection received from a camera $pc$, the algorithm would interpolate with a 2D spline the last 5 detections of the drone in $pc$ (if the detections were not too far apart in time)
+    \item For every other camera $i$, if their last detection was within the 2D spline time range, the algorithm would evaluate the spline at the timestamp of the detection and generate a 2D-2D correspondence.
+    \item Every correspondence $pc-i$ would be used to triangulate a 3D point, then these points would be averaged and added to the 3D splines of the drone trajectory.
+    \item If the new 3D point was sufficiently close to last spline segment in time, the algorithm would extend the spline to include the new point. 
+\end{itemize}
+
+This approach allowed the algorithm to keep the 3D trajectory of the drone up to date in real-time, while also registering new cameras as they became available.
+\section{Limitations to the trajectory reconstruction}
 \label{sec:limitations}
+
+\subsubsection{Bubdle Adjustment}
 
 
 \end{document}
