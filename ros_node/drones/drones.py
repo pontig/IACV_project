@@ -31,7 +31,7 @@ class MainNode(Node):
         self.min_points_for_spline = 4
         self.max_time_gap = .5
         self.cameras_to_ignore = [0] # Camera 3 is the one with the most noise, so we ignore it for now
-        self.min_correspondences = 500
+        self.min_correspondences = 2000 # 500
         self.min_accettable_f = 0.8
         self.possible_values = range(0, 7)
         self.mode = "CALIBRATION"  
@@ -172,8 +172,8 @@ class MainNode(Node):
         
         self.message_count += 1
         
-        if 330 < msg.data[0] < 330.5:
-            threading.Thread(target=self.plotall, daemon=True).start()
+        # if 330 < msg.data[0] < 330.5:
+        #     threading.Thread(target=self.plotall, daemon=True).start()
 
         # Create raw data point
         raw_point = (msg.data[0], msg.data[1], msg.data[2], msg.data[3])
@@ -254,7 +254,7 @@ class MainNode(Node):
                                 self.trajectory.append(avg_triangulated_point)
                                 self.trajectory_timestamps.append(raw_point[0])
                             self.publish_pointcloud(self.trajectory)
-            if self.message_count % 1000 == 0:
+            if self.message_count % 3000 == 0:
                 self.compute_3d_splines()
         
         # If the current camera has no data yet, or if the last group is empty
@@ -458,6 +458,25 @@ class MainNode(Node):
             # Send static transforms for all localized cameras
             tvec, R = self.camera_poses[camera_id]
 
+            # Plot reprojection analysis before bundle adjustment
+            pts_detected_camera = []
+            for group in self.rectified_data_lists[camera_id]:
+                for detection in group:
+                    pts_detected_camera.append((detection[2], detection[3], detection[0]))
+
+            CameraInfo = namedtuple('CameraInfo', ['K_matrix', 'distCoeff', 'resolution'])
+            camera_info = CameraInfo(
+                K_matrix=self.rectified_camera_matrices[camera_id],
+                distCoeff=np.zeros(5),  # Assuming no distortion for rectified points
+                resolution=self.camera_calibrations[camera_id]['resolution']
+            )
+            self.plot_reprojection_analysis(
+                splines_3d, pts_detected_camera,
+                R, tvec, camera_info, camera_id,
+                title=f"Reprojection Analysis for Camera {camera_id} before Bundle Adjustment",
+                before=True
+            )
+
             def run_bundle_adjustment(camera_id=camera_id, tvec=tvec, R=R):
                 res = self.bundle_adjust_camera_pose(
                     splines_3d,
@@ -480,12 +499,15 @@ class MainNode(Node):
                     K_matrix=self.rectified_camera_matrices[camera_id],
                     distCoeff=np.zeros(5),  # Assuming no distortion for rectified points
                     resolution=self.camera_calibrations[camera_id]['resolution']
-                )                
+                )      
                 self.plot_reprojection_analysis(
-                    splines_3d, pts_detected_camera, res['R'], res['tvec'], camera_info, camera_id, title=f"Reprojection Analysis for Camera {camera_id} after Bundle Adjustment")
+                    splines_3d, pts_detected_camera, 
+                    res['R'], res['tvec'], camera_info, camera_id,
+                    title=f"Reprojection Analysis for Camera {camera_id} after Bundle Adjustment")
+                self.get_logger().info(f'Bundle adjustment completed for camera {camera_id} with {len(pts_detected_camera)} points')          
                     
 
-            threading.Thread(target=run_bundle_adjustment, daemon=True).start()
+            # threading.Thread(target=run_bundle_adjustment, daemon=True).start()
                    
     def localize_remaining_cameras(self, splines_3d, CameraInfo):
         """
@@ -579,7 +601,7 @@ class MainNode(Node):
     
     def plot_reprojection_analysis(
         self, splines_3d, original_points_2d, 
-        R, t, camera_info, camera_id, title=None
+        R, t, camera_info, camera_id, title=None, before=False
     ):
         """Plot reprojected 2D points for a single camera."""
         # Reproject points
@@ -606,6 +628,7 @@ class MainNode(Node):
             plt.title(title)
 
         # Plot reprojected points
+        original_points_2d = np.array(original_points_2d)
         plt.scatter(reprojected_points[:, 0], -reprojected_points[:, 1], c='r', label='Reprojected Points', s=1)
         plt.scatter(
             original_points_2d[:, 0], -original_points_2d[:, 1],
@@ -618,7 +641,9 @@ class MainNode(Node):
         plt.ylim(-camera_info.resolution[1], 0)
 
         plt.tight_layout()
-        plt.savefig(f"reprojection_analysis_camera_{camera_id}.png")
+        
+        before_after = "b" if before else "a"
+        plt.savefig(f"reprojection_analysis_camera_{camera_id}_{before_after}.png")
         
     def bundle_adjust_camera_pose(self, splines_3d, camera_detections, camera_K, camera_dist_coeffs, 
                                 initial_rvec=None, initial_tvec=None):
