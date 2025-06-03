@@ -114,7 +114,7 @@ def load_dataframe(cameras, dataset_no):
             if x != 0.0 and y != 0.0:
                 cv.circle(image, (int(x), int(y)), 2, (0, 255, 0), -1)
         
-        cv.imwrite(f'plots/detections_on_image_camera_{i}.png', image)
+        # cv.imwrite(f'plots/detections_on_image_camera_{i}.png', image)
 
         frame_indices_i = np.array([frame_id for frame_id, _, _ in detections_i])
         contiguous_i = find_contiguous_regions(detections_i)
@@ -141,7 +141,7 @@ def load_dataframe(cameras, dataset_no):
         plt.title(f'Splines for Camera {i}')
         plt.xlim(0, camera_info_i.resolution[0])
         plt.ylim(-camera_info_i.resolution[1], 0)
-        plt.savefig(f'plots/splines_camera_{i}.png')
+        # plt.savefig(f'plots/splines_camera_{i}.png')
         plt.clf()
         plt.close()
         
@@ -172,7 +172,7 @@ def load_dataframe(cameras, dataset_no):
         plt.xlim(0, camera_info_i.resolution[0])
         plt.ylim(-camera_info_i.resolution[1], 0)
 
-        plt.savefig(f'plots/detections_camera_{i}.png')
+        # plt.savefig(f'plots/detections_camera_{i}.png')
         plt.clf()
         plt.close()
 

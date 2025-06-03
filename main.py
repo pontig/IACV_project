@@ -9,7 +9,6 @@ import logging
 from datetime import datetime
 import time
 import sys
-from concurrent.futures import ProcessPoolExecutor
 from scipy.interpolate import make_interp_spline
 
 # import matplotlib
@@ -41,6 +40,8 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 DATASET_NO = 4
+plot_output_dir = f"plots/dataset{DATASET_NO}"
+os.makedirs(plot_output_dir, exist_ok=True)
 
 
 def to_normalized_camera_coord(pts, K, distcoeff):
@@ -518,14 +519,15 @@ if __name__ == "__main__":
     # Compute first 3D splines
     splines_3d = generate_3d_splines(triangulated_points_first_step_with_timestamps, [])
         
-    # plot_triangulated_points(triangulated_points, main_camera, secondary_camera)
+    # plot_triangulated_points(triangulated_points, main_camera, secondary_camera, output_dir=plot_output_dir)
 
     # plot_reprojection_analysis(
     #     triangulated_points_first_step, np.array([y for _, y, _ in correspondences]),
     #     R, t,
-    #     camera_info[int(secondary_camera)], int(secondary_camera)
+    #     camera_info[int(secondary_camera)], int(secondary_camera),
+    #     output_dir=plot_output_dir)
     # )
-    # plot_3d_splines(triangulated_points_first_step, correspondences, main_camera, secondary_camera)
+    # plot_3d_splines(triangulated_points_first_step, correspondences, main_camera, secondary_camera, output_dir=plot_output_dir)
 
 
     # ============== Step 2.1: Add cameras in decreasing order of inlier ratio ==============
@@ -635,7 +637,7 @@ if __name__ == "__main__":
             "cam_id": int(new_camera),
             "R": cv.Rodrigues(rvec)[0],
             "t": tvec,
-        }
+        }            
         
         # ============== Step 2.2: Extend 3D splines with new camera detections ==============
         
@@ -666,10 +668,10 @@ if __name__ == "__main__":
         # Keep only points within the range
         tpns_to_add_to_3d = triangulated_points_nth_step[np.logical_not(mask)]
         tpns_to_add_to_3d_with_timestamps = tpns_with_timestamps[np.logical_not(mask)]        
-        # plot_triangulated_points(triangulated_points_nth_step, main_camera, third_camera)
+        # plot_triangulated_points(triangulated_points_nth_step, main_camera, third_camera, output_dir=plot_output_dir)
         
         # Plot splines in red and triangulated_points in blue
-        fig = plt.figure(figsize=(15, 10))
+        fig = plt.figure(figsize=(10, 10))
         ax = fig.add_subplot(111, projection='3d')
 
         # Plot triangulated_points in blue
@@ -696,6 +698,8 @@ if __name__ == "__main__":
         ax.set_zlabel("Z")
         ax.legend()
         
+        plt.savefig(f"{plot_output_dir}/3d_points_and_splines_{main_camera}_{new_camera}.png")
+        
         splines_3d = generate_3d_splines(tpns_to_add_to_3d_with_timestamps, splines_3d)
         
         # Convert splines to mutable structure
@@ -710,6 +714,14 @@ if __name__ == "__main__":
                 
         # Convert back to original format
         splines_3d = [(s['spline_x'], s['spline_y'], s['spline_z'], s['ts']) for s in spline_dicts]
+        
+        plot_reprojection_analysis(
+            splines_3d, frames[:, 1:],
+            cv.Rodrigues(camera_poses[int(new_camera)]["R"])[0], camera_poses[int(new_camera)]["t"],
+            camera_info[int(new_camera)], int(new_camera),
+            title=f"Reprojection Analysis for Camera {new_camera} before bundle adjustment",
+            output_dir=plot_output_dir, initial=True
+        )
         
         for camera_pose in camera_poses:
             if camera_pose["R"] is None or camera_pose["cam_id"] != int(new_camera):
@@ -818,10 +830,11 @@ if __name__ == "__main__":
                     splines_3d, frames[:, 1:],
                     cv.Rodrigues(camera_poses[i]["R"])[0], camera_poses[i]["t"],
                     camera_info[i], i,
-                    title=f"Refined Reprojection Analysis for Camera {i}"
+                    title=f"Refined Reprojection Analysis for Camera {i}",
+                    output_dir=plot_output_dir
         )
     
-    fig = plt.figure(figsize=(15, 10))
+    fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
     
     plane_size = 10
@@ -832,17 +845,18 @@ if __name__ == "__main__":
     for spline in splines_3d:
         spline_x, spline_y, spline_z, ts = spline
         ax.plot(spline_x(ts), spline_y(ts), spline_z(ts))
-    for camera_pose in camera_poses:
-        if camera_pose["R"] is None:
-            continue
-        cam_id = camera_pose["cam_id"]
-        R = camera_pose["R"]
-        t = camera_pose["t"].flatten()
-        ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=30)
-    ax.set_title(f"3D Splines with Camera Poses")
+    # for camera_pose in camera_poses:
+    #     if camera_pose["R"] is None:
+    #         continue
+    #     cam_id = camera_pose["cam_id"]
+    #     R = camera_pose["R"]
+    #     t = camera_pose["t"].flatten()
+    #     ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=30)
+    ax.set_title(f"3D Splines")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
-    ax.legend()
+    # ax.legend()
+    fig.savefig(f"{plot_output_dir}/3d_splines_final.png")
     
     plt.show()

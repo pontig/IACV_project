@@ -60,7 +60,10 @@ class MainNode(Node):
             topic_name = f'/camera_{cam_id}/rectified_image'
             self.image_publishers[cam_id] = self.create_publisher(Image, topic_name, 10)
             resolution = self.camera_calibrations[cam_id]['resolution']
-            self.live_detections[cam_id] = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)  # Initialize with zeros
+            image = cv.imread(f'cam{cam_id}.jpg')
+            if image is None:
+                image = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
+            self.live_detections[cam_id] = image
             blank_image = np.ones((resolution[1], resolution[0], 3), dtype=np.uint8) * 255
             image_msg = self.cv_bridge.cv2_to_imgmsg(blank_image, encoding='bgr8')
             self.image_publishers[cam_id].publish(image_msg)
@@ -184,7 +187,7 @@ class MainNode(Node):
         # Publish the rectified image for this camera with a white dot at the rectified point
         if element_1 in self.image_publishers:
             image = self.live_detections[element_1].copy()
-            cv.circle(image, (int(rectified_point[2]), int(rectified_point[3])), 5, (255, 255, 255), -1)
+            cv.circle(image, (int(rectified_point[2]), int(rectified_point[3])), 5, (0, 255, 0), -1)
             # Convert to ROS Image message
             image_msg = self.cv_bridge.cv2_to_imgmsg(image, encoding='bgr8')
             # Publish the image

@@ -11,10 +11,11 @@
 \usepackage{booktabs}
 \usepackage{subfigure}
 \usepackage{hyperref}
+\usepackage{listings}
 \newcolumntype{Y}{>{\centering\arraybackslash}X}
 \usepackage[left=2.00cm, right=2.00cm, top=2.00cm, bottom=2.00cm]{geometry}
 
-\title{AN2DL Reports Template}
+\title{IACV project report}
 
 \begin{document}
 
@@ -41,7 +42,7 @@
     {247274 - 10716792}\\
 
     \vspace{5mm}
-    {\Large \textbf{Topic F02: Reconstructing drone trajectories and cameras from multiple images}}\\
+    {\Large \textbf{Proposal F02: Reconstructing drone trajectories and cameras from multiple images}}\\
     \vspace{3mm}
     \today
 \end{center}
@@ -70,6 +71,33 @@ The pipeline begins by detecting the UAV in each video and generating approximat
 
 This approach represents a significant advancement in practical UAV tracking by eliminating the need for prior camera synchronization or rigid installation constraints, making it suitable for scalable and cost-effective deployments in real-world outdoor environments.
 
+\section{Compoarison with the original work}
+
+Our project closely follows the methodology outlined in the paper, but it is not as complete as the original work. Below is a comparison of the main differences between our implementation and the original work:
+
+\begin{table}[H]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+    \begin{tabularx}{\textwidth}{|Y|c|Y|}
+        \hline
+        \textbf{Paper aspect}                           & \textbf{Implemented} & \textbf{Notes}                                                                                                     \\
+        \hline
+        Drone detection                                 & Yes                  & In the paper it is not explained how the drone is detected, they focus only on the trajectory reconstruction.      \\\hline
+        Time shift estimation                           & Yes                  & We implemented a simple brute-force search algorithm, while the paper uses a solver implemented by another author. \\\hline
+        Camera registration                             & Yes                  &                                                                                                                    \\\hline
+        Correspondences between unsynchronized cameras  & Yes                  & We didn't perform the linear approximation of the drone motion, but it was still quite effective.                  \\\hline
+        Rolling shutter correction                      & No                   &                                                                                                                    \\\hline
+        3D trajectory reconstruction                    & Yes                  &                                                                                                                    \\\hline
+        Bundle adjustment: spline trajectory refinement & Almost               & We optimized only camera poses, not the 3D splines nor $\alpha,\beta$ parameters.                                  \\\hline
+        Bundle adjustment: least kinetic energy         & No                   &                                                                                                                    \\\hline
+        Bundle adjustment: least force                  & No                   &                                                                                                                    \\\hline
+        Offline trajectory reconstruction               & Yes                  &                                                                                                                    \\\hline
+        Online trajectory reconstruction                & Yes                  &                                                                                                                    \\\hline
+    \end{tabularx}
+    \caption{Comparison between our implementation and the original work}
+    \label{tab:comparison}
+\end{table}
+
 \section{Implementation}
 
 Our implementation of the project closely follows the methodology outlined in the paper, even though it is not as complete as the original work.
@@ -96,10 +124,18 @@ Initially, the drone was detected using a classical background subtraction metho
 
 To improve robustness, especially during frames where the drone was not clearly visible or briefly occluded, we integrated optical flow tracking using the Lucas-Kanade method. After an initial detection via background subtraction, we initialized tracking by identifying good features within the drone's bounding box. Between consecutive frames, these features were tracked to estimate the drone's displacement, allowing us to update its position even in the absence of fresh detections. We incorporated validation checks to assess confidence in the optical flow results and fall back to background subtraction when necessary. This hybrid approach significantly enhanced the continuity and accuracy of the trajectory, particularly during challenging segments of the video sequence, and reduced the frequency of detection failures.
 
-    {\color{red} Aggiungere foto di frames e di grafici\\}
-    {\color{red} YOLO?}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=.6\textwidth]{imgs/drone_detection_bs.png}
+    \includegraphics[width=.6\textwidth]{imgs/drone_detection_of.png}
+    \caption{Drone detection results using background subtraction (top) and optical flow tracking (bottom)}
+    \label{fig:drone_detection}
+\end{figure}
+
+{\color{red} YOLO?}
 
 \subsubsection*{Results}
+\label{sec:drone_detection_results}
 
 The drone detection algorithm was evaluated on some videos from the dataset, and the results were imperfect but promising. The main limitations were:
 
@@ -108,11 +144,10 @@ The drone detection algorithm was evaluated on some videos from the dataset, and
     \item The algorithm often mistook the drone for other moving objects in the scene, such as birds. Unfortunately, this problem could not be solved, as the drone was often too small in the frame to be distinguished from other objects. To partially mitigate this issue, we saved also the velocity of the detected object for each frame (as shown in \ref{fig:detection_plots}), and we think that this information could be used to filter out false positives
 \end{itemize}
 
-{\color{red} cambiare disposizione in questo grafico e citare quale video}
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.8\textwidth]{../plots/drone_tracking_output_trajectory.png}
-    \caption{Analysis of the drone detection algorithm on a video from the dataset. It is clear the heavy presence of false positives, as the algorithm often detects birds and other moving objects as the drone. The velocity of the detected object is also shown, which could be used to filter out false positives.}
+    \includegraphics[width=\textwidth]{../plots/drone_tracking_output_trajectory.png}
+    \caption{Analysis of the drone detection algorithm on a video from the dataset (Dataset 1, cam 2). It is clear the heavy presence of false positives, as the algorithm often detects birds and other moving objects as the drone. The velocity of the detected object is also shown, which could be used to filter out false positives.}
     \label{fig:detection_plots}
 \end{figure}
 
@@ -152,14 +187,7 @@ An example of the results of this algorithm is shown in Figure \ref{fig:beta_sea
 
 To establish correspondences between cameras, we adopted the approach described in the paper: for each detection in camera $i$, we search for a temporally overlapping set of consecutive detections in camera $j$ (after applying the current temporal shift). If such an overlap exists, we fit a spline to the detections in camera $j$ and evaluate it at the timestamp of the detection in camera $i$. This provides a set of matched points that can be used to compute \textit{F}\footnote{In order to decrease the computational effort, we decided to pre-compute and save all 2D splines only once, and then shift the timestamps when needed}.
 
-This method, while simple, proved effective for aligning the detections across unsynchronized cameras and enabled robust estimation of the temporal shifts required for subsequent trajectory reconstruction.{\color{red} The only exception was in some of the smartphone cameras that were recording at a variable frame rate. In some cases the fluctuation in FPS was very high, e.g. Mate 7 and Mate 10 in this dataset. The authors of the paper suggest to remap the detected points to a fixed frame rate with a linear interpolation, but we did not implement this step in our code. Instead, we simply ignored these cameras, as they were not essential for the trajectory reconstruction. An effect of this is shown in Figure \ref{fig:failed_beta_search}, where the algorithm fails to find a peak in the number of inliers for each camera pair including the above mentioned cameras.
-
-        \begin{figure}[h]
-            \centering
-            \includegraphics[width=\textwidth]{../plots/search_results/dataset4/inliers_vs_beta_combined_cam1-3_ds4.png}
-            \caption{Example of the results of the temporal shift estimation algorithm (dataset 4, cameras 1-3)}
-            \label{fig:failed_beta_search}
-        \end{figure}}
+This method, while simple, proved effective for aligning the detections across unsynchronized cameras and enabled robust estimation of the temporal shifts required for subsequent trajectory reconstruction.
 
 From then on, each camera pair was processed in order of decreasing number of inliers, so that the cameras with the most reliable detections were processed first. This was done to ensure that the trajectory reconstruction was as accurate as possible.
 
@@ -193,15 +221,32 @@ When a new couple was selected for localization, the same registration procedure
 
 \subsubsection{3D Splines extension}
 
-Once each new camera was registered, we could extend the 3D splines to include the new detections. This was done by triangulating the new 2D-2D correspondences in the pair \textit{mc} - \textit{nc}, and then checking if the new 3D points extended the existing splines' time range. If they did, we extended the splines to include the new points, otherwise we simply added the new points to the existing splines. If a segment of new 3D points were able to bridge the gap between two existing splines, we merged the two splines into one. This was done to ensure that the 3D splines were as continuous as possible, and to avoid having too many small segments.
+Once each new camera was registered, we could extend the 3D splines to include the new detections. This was done by triangulating the new 2D-2D correspondences in the pair \textit{mc} - \textit{nc}, and then checking if the new 3D points extended the existing splines' time range. If they did, we extended the splines to include the new points, otherwise we simply added the new points to the existing splines. If a segment of new 3D points were able to bridge the gap between two existing splines, we merged the two splines into one. This was done to ensure that the 3D splines were as continuous as possible, and to avoid having too many small segments. This process is illustrated in Figure \ref{fig:3d_splines_extension}
 
-    {\color{red} Grafici di come si estendono le spline 3D con l'aggiunta di nuove camere}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/3d_points_and_splines_4.0_6.0.png}
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/3d_points_and_splines_5.0_0.0.png}
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/3d_points_and_splines_4.0_2.0.png}
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/3d_points_and_splines_6.0_1.0.png}
+    \caption{Example of how the 3D splines are extended with the addition of new cameras (dataset 4). When a new camera is registered, the already existing 3D splines (red) are extended to include the new 3D points (blue)}
+    \label{fig:3d_splines_extension}
+\end{figure}
 
 \subsubsection{Bundle Adjustment}
 
-Since the procedure described above was prune to accumulate errors, we applied a bundle adjustment step to refine the 3D points and camera poses. This was done by interpolating the 3D splines at the timestamps of the detections in each camera, and then using the 2D-3D correspondences to minimize the reprojection error. The optimization was performed by Python's \texttt{scipy.optimize.least\_squares} function, which allowed us to minimize the error in a robust and efficient way.
+Since the procedure described above was prune to accumulate errors, we applied a bundle adjustment step to refine the 3D points and camera poses. This was done by interpolating the 3D splines at the timestamps of the detections in each camera, and then using the 2D-3D correspondences to minimize the reprojection error. The optimization was performed by Python's \texttt{scipy.optimize.least\_squares} function, which allowed us to minimize the error in a robust and efficient way. The effects of the bundle adjustment can be seen in Figure \ref{fig:reprojection_analysis}.
 
 The bundle adjustment was performed for each registered camera every time a new camera was added.\\
+
+{\color{red} TODO: move these bulky plots to the final pages}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{../plots/dataset4/reprojection_analysis_camera_0_before_ba_.png}
+    \includegraphics[width=0.8\textwidth]{../plots/dataset4/reprojection_analysis_camera_0.png}
+    \caption{Reprojection error analysis for camera 0 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment}
+    \label{fig:reprojection_analysis}
+\end{figure}
 
 After all cameras were registered, we should have had a complete 3D trajectory of the drone, with all cameras registered in the same global frame and all 3D points visible from at least two cameras. However, the implemented approach suffered from some limitations, that we are going to discuss in section \ref{sec:limitations}.
 
@@ -237,6 +282,13 @@ If \textit{F} brought to a sufficient number of inliers, the algorithm would com
 
 After the relative pose of the two cameras was computed, the algorithm would generate the 3D positions of the drone by triangulating the 2D-2D correspondences between the two cameras, and then generate the initial 3D splines for the drone trajectory.
 
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.6\textwidth]{imgs/online_full_trajectory.png}
+    \caption{Example of the 3D trajectory reconstructed by the online algorithm (dataset 4). The drone positions are shown as white dots, while the cameras are shown as ROS tf frames}
+    \label{fig:online_full_trajectory}
+\end{figure}
+
 Periodically, the algorithm would check if cameras not yet registered had enough correspondences with the 3D splines. If so, it would compute the relative pose of the new camera with respect to the global frame using the PnP algorithm
 
 \subsubsection{3D Splines extension}
@@ -247,14 +299,120 @@ In parallel with the camera localization, the algorithm would also keep up to da
     \item For each new detection received from a camera $pc$, the algorithm would interpolate with a 2D spline the last 5 detections of the drone in $pc$ (if the detections were not too far apart in time)
     \item For every other camera $i$, if their last detection was within the 2D spline time range, the algorithm would evaluate the spline at the timestamp of the detection and generate a 2D-2D correspondence.
     \item Every correspondence $pc-i$ would be used to triangulate a 3D point, then these points would be averaged and added to the 3D splines of the drone trajectory.
-    \item If the new 3D point was sufficiently close to last spline segment in time, the algorithm would extend the spline to include the new point. 
+    \item If the new 3D point was sufficiently close to last spline segment in time, the algorithm would extend the spline to include the new point.
 \end{itemize}
 
 This approach allowed the algorithm to keep the 3D trajectory of the drone up to date in real-time, while also registering new cameras as they became available.
-\section{Limitations to the trajectory reconstruction}
+
+\subsubsection{Bundle Adjustment}
+
+As the paper suggested, the algorithm would periodically perform a bundle adjustment to refine the 3D trajectory of the drone and the camera poses. This was done in the same way as in the offline trajectory reconstruction (same code), and it was performed periodically (every 1000 detections) and in a separate thread to avoid blocking the main thread that was receiving the drone detections.
+
+\section{Limitations of the implementation}
 \label{sec:limitations}
 
-\subsubsection{Bubdle Adjustment}
+The implemented pipeline, while functional, has several limitations that should be mentioned:
 
+\subsection{Drone Detection}
+
+The limitations of the drone detection algorithm were already discussed in Section \ref{sec:drone_detection_results}
+
+\subsection{Offline Trajectory Reconstruction}
+
+during the $\beta$ search phase, some of the smartphone cameras were recording at a variable frame rate. In some cases the fluctuation in FPS was very high, e.g. Mate 7 and Mate 10 in this dataset. For this reason, the algorithm was not able to find a peak in the number of inliers for these cameras, as shown in Figure \ref{fig:failed_beta_search}. This is because our implementation relies on the assumption that the frame rate is constant, and therefore it cannot handle cameras with variable frame rates.
+
+The authors of the paper suggest to remap the detected points to a fixed frame rate with a linear interpolation, but we did not implement this step in our code. Instead, we simply ignored these cameras, as they were not essential for the trajectory reconstruction. An effect of this is shown in Figure \ref{fig:failed_beta_search}, where the algorithm fails to find a peak in the number of inliers for each camera pair including the above mentioned cameras.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{../plots/search_results/dataset4/inliers_vs_beta_combined_cam1-3_ds4.png}
+    \caption{Example of the results of the temporal shift estimation algorithm (dataset 4, cameras 1-3). Due to the variable frame rate of the camera, the algorithm fails to find a clear peak in the number of inliers}
+    \label{fig:failed_beta_search}
+\end{figure}
+
+Another limitation of the offline trajectory reconstruction is that the process of camera localization was prone to accumulating errors. As a result, when a new camera was registered, the 3D splines were not always continuous, and the reconstructed trajectory could be inaccurate. This led to temporal discontinuities in the splines, which in turn reduced the effectiveness of the bundle adjustment step. These issues are partially visible in Figure \ref{fig:reprojection_analysis}, where the bundle adjustment does not fully correct the reprojection errors. They are also evident in Figure \ref{fig:splines_discontinuity}, which shows discontinuous 3D splines and an imprecise trajectory, and in Figure \ref{fig:bad_ba}, where the bundle adjustment fails to refine the camera position.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.6\textwidth]{imgs/splines_discontinuity.png}
+    \caption{Example of the discontinuity in the 3D splines (dataset 4)}
+    \label{fig:splines_discontinuity}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.6\textwidth]{../plots/dataset4/reprojection_analysis_camera_1_before_ba_.png}
+    \includegraphics[width=0.6\textwidth]{../plots/dataset4/reprojection_analysis_camera_1.png}
+    \caption{Reprojection error analysis for camera 1 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment. It is clear that the bundle adjustment completely fails to refine the trajectory, as the 3D splines are not consistent}
+    \label{fig:bad_ba}
+\end{figure}
+
+This problem triggered a cascade effect: the inaccuracies in the 3D splines led to poor triangulation of new points, which in turn caused further inaccuracies in the camera poses.
+
+\subsection{Online Trajectory Reconstruction}
+
+The online trajectory reconstruction algorithm suffered from similar limitations as the offline one, and they were even more pronounced due to the real-time nature of the implementation.
+
+Since the dataset provided ground truth for $\alpha,\beta$ parameters only for datasets 3 and 4, we could test the online trajectory reconstruction only on these datasets.
+
+The lower number of correspondences available for each camera pair made the computed \textit{F} less reliable, and the algorithm was more prone to accumulating errors. This led to a more pronounced drift in the 3D trajectory (Figure \ref{fig:online_noisy_detections}), which was not corrected by the bundle adjustment step.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.5\textwidth]{imgs/online_noisy_detections.png}
+    \caption{Example of the noisy drone detections in the online trajectory reconstruction (dataset 4)}
+    \label{fig:online_noisy_detections}
+\end{figure}
+
+The 3D splines were so noisy that the bundle adjustment step actually worsened the results, introducing more errors instead of correcting them. This effect is illustrated in Figure \ref{fig:bad_ba_online}. This cycle of errors often led to the inability to produce a trajectory at all (Figure \ref{fig:bad_ba_online_failed}).
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.6\textwidth]{imgs/online_no_ba_cam2.png}
+    \includegraphics[width=0.6\textwidth]{imgs/online_ba_cam2.png}
+    \caption{Reprojection error for camera 2 (dataset 4): before (top) and after (bottom) bundle adjustment. The bundle adjustment worsens the results, most likely due to the noisy (although plausible) 3D splines}
+    \label{fig:bad_ba_online}
+\end{figure}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.5\textwidth]{imgs/online_failed_due_to_ba.png}
+    \caption{Example of the algorithm failing to produce a trajectory due to bundle adjustment introducing too many errors.}
+    \label{fig:bad_ba_online_failed}
+\end{figure}
+
+A new issue was also introduced by the real-time nature of the implementation: the algorithm was not able to correctly handle the fisheye camera (gopro3); we think that this was due to the fact that the fisheye camera was calibrated as a pinhole camera, and therefore the computation of its distortion coefficients in the intrinsic calibration step was not accurate enough. To mitigate this issue, we decided to ignore the fisheye camera in the online trajectory reconstruction, as it was not essential for the trajectory reconstruction. In future work, we could try to distinct between pinhole and fisheye cameras, and apply a different rectification method for each type of camera.
+
+\section{Instructions to run the code}
+
+Since we implemented both the offline and online trajectory reconstruction algorithms, we provided two different scripts to run them.
+
+\subsection{Directory structure}
+
+Since the project relies on the dataset provided by the authors of the paper that is publicly available on GitHub (and, moreover, quite large), we decided to not include it in the repository. We directly cloned the dataset repository in the root directory of our project, and made some little modifications:
+
+\begin{itemize}
+    \item We extracted each video from the original dataset and saved each video in the same folder as their compressed version
+    \item Some cameras in the dataset are provided with two versions of calibration files (e.g. mate10): for a easier automatic loading of the calibration files, we kept only one of the two versions, removing the suffix \texttt{\_1} or \texttt{\_2} from the file name. This way, the code can load the calibration files without having to specify which version to use.
+\end{itemize}
+
+Said that, in order to run the code, you need to have all the Python dependencies installed, this can be done by running the following command in the root directory of the project:
+
+\begin{verbatim}
+pip install -r requirements.txt
+\end{verbatim}
+
+\subsection{Offline}
+
+The offline trajectory reconstruction is implemented as a set of Python scripts that can be run from the command line
+
+% \appendix
+% \newpage
+% begin{center}
+%     \Huge\textbf{Appendix}
+% \end{center}
+% \vspace*{\f\thispagestyle{empty}
+% \vspace*{\fill}
+% \ill}
+% \newpage
 
 \end{document}

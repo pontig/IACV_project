@@ -12,6 +12,7 @@ class DroneTracker:
         self.output_path = output_path
         self.trajectory_path = output_path.replace('.mp4', '_trajectory.json')
         self.plot_path = output_path.replace('.mp4', '_trajectory.png')
+        self.first_frame = None
 
         # Drone detection parameters
         self.min_area = 10
@@ -33,14 +34,14 @@ class DroneTracker:
         self.bg_subtractor = cv.createBackgroundSubtractorMOG2(
             history=500, varThreshold=50, detectShadows=True)
 
-    def create_search_mask(self, frame_height, frame_width):
-        mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
+    def create_search_mask(self):
+        mask = np.zeros((self.frame_height, self.frame_width), dtype=np.uint8)
         mask[0:self.search_y_limit, :] = 255
         return mask
 
     def detect_drone_candidates(self, frame, fg_mask):
-        frame_height, frame_width = frame.shape[:2]
-        search_mask = self.create_search_mask(frame_height, frame_width)
+        self.frame_height, self.frame_width = frame.shape[:2]
+        search_mask = self.create_search_mask()
         fg_mask = cv.bitwise_and(fg_mask, search_mask)
         contours, _ = cv.findContours(fg_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
@@ -116,7 +117,7 @@ class DroneTracker:
             return None, None
 
     def draw_frame_annotations(self, frame, smooth_pos, best_candidate, frame_num, total_frames, current_time):
-        frame_height = frame.shape[0]
+        self.frame_height = frame.shape[0]
         cv.line(frame, (0, self.search_y_limit), (frame.shape[1], self.search_y_limit), (255, 255, 0), 2)
         cv.putText(frame, "Search Area", (10, self.search_y_limit - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
         if best_candidate and smooth_pos:
@@ -129,8 +130,8 @@ class DroneTracker:
         if len(self.drone_positions) > 1:
             for i in range(1, len(self.drone_positions)):
                 cv.line(frame, self.drone_positions[i-1], self.drone_positions[i], (255, 0, 0), 2)
-        cv.putText(frame, f"Frame: {frame_num}/{total_frames}", (10, frame_height - 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv.putText(frame, f"Time: {current_time:.2f}s", (10, frame_height - 30), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv.putText(frame, f"Frame: {frame_num}/{total_frames}", (10, self.frame_height - 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv.putText(frame, f"Time: {current_time:.2f}s", (10, self.frame_height - 30), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         return frame
 
     def process_video(self):
@@ -138,12 +139,12 @@ class DroneTracker:
         if not cap.isOpened():
             print("Error: Cannot open video file.")
             return
-        frame_width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+        self.frame_width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+        self.frame_height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv.CAP_PROP_FPS)
         total_frames = int(cap.get(cv.CAP_PROP_FRAME_COUNT))
         fourcc = cv.VideoWriter_fourcc(*'mp4v')
-        out = cv.VideoWriter(self.output_path, fourcc, fps, (frame_width, frame_height))
+        out = cv.VideoWriter(self.output_path, fourcc, fps, (self.frame_width, self.frame_height))
 
         print(f"Processing {total_frames} frames at {fps} FPS...")
         print(f"Search area limited to Y < {self.search_y_limit} pixels")
@@ -156,6 +157,9 @@ class DroneTracker:
                 break
             self.frame_count += 1
             current_time = self.frame_count / fps
+            
+            if self.first_frame is None:
+                self.first_frame = frame.copy()
 
             fg_mask = self.bg_subtractor.apply(frame)
             kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (3, 3))
@@ -216,23 +220,29 @@ class DroneTracker:
 
         plt.figure(figsize=(19, 10))
         plt.subplot(2, 2, 1)
-        plt.plot(x_coords, y_coords, 'b-')
+        # Show the first frame as background
+        if self.first_frame is not None:
+            plt.imshow(cv.cvtColor(self.first_frame, cv.COLOR_BGR2RGB))
+        # Plot trajectory on top
+        plt.plot(x_coords, y_coords, color='lime', linestyle='-')
         plt.scatter(x_coords[0], y_coords[0], color='green', s=100, label='Start')
         plt.scatter(x_coords[-1], y_coords[-1], color='red', s=100, label='End')
         plt.axhline(y=self.search_y_limit, color='aqua', linestyle='--', label='Search Limit')
         plt.gca().invert_yaxis()
+        plt.xlim(0, self.frame_width)
+        plt.ylim(self.frame_height, 0)
         plt.xlabel('X Position')
         plt.ylabel('Y Position')
         plt.title('Drone Trajectory')
         plt.legend()
 
-        plt.subplot(2, 2, 2)
+        plt.subplot(2, 2, 3)
         plt.plot(times, x_coords, 'r-')
         plt.xlabel('Time (s)')
         plt.ylabel('X Position')
         plt.title('X Position Over Time')
 
-        plt.subplot(2, 2, 3)
+        plt.subplot(2, 2, 4)
         plt.plot(times, y_coords, 'g-')
         plt.axhline(y=self.search_y_limit, color='aqua', linestyle='--')
         plt.gca().invert_yaxis()
@@ -240,7 +250,7 @@ class DroneTracker:
         plt.ylabel('Y Position')
         plt.title('Y Position Over Time')
 
-        plt.subplot(2, 2, 4)
+        plt.subplot(2, 2, 2)
         speeds = [np.hypot(x_coords[i] - x_coords[i-1], y_coords[i] - y_coords[i-1]) /
                   (times[i] - times[i-1]) for i in range(1, len(times)) if times[i] > times[i-1]]
         if speeds:
@@ -263,12 +273,12 @@ class DroneTracker:
             print("Error: Cannot open video file.")
             return
         
-        frame_width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+        self.frame_width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+        self.frame_height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv.CAP_PROP_FPS)
         total_frames = int(cap.get(cv.CAP_PROP_FRAME_COUNT))
         fourcc = cv.VideoWriter_fourcc(*'mp4v')
-        out = cv.VideoWriter(self.output_path, fourcc, fps, (frame_width, frame_height))
+        out = cv.VideoWriter(self.output_path, fourcc, fps, (self.frame_width, self.frame_height))
 
         print(f"Processing {total_frames} frames with optical flow at {fps} FPS...")
         print(f"Search area limited to Y < {self.search_y_limit} pixels")
@@ -302,6 +312,9 @@ class DroneTracker:
             self.frame_count += 1
             current_time = self.frame_count / fps
             gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+            
+            if self.first_frame is None:
+                self.first_frame = frame.copy()
             
             # Background subtraction for initial detection and validation
             fg_mask = self.bg_subtractor.apply(frame)
@@ -344,8 +357,8 @@ class DroneTracker:
                         new_y = int(y + median_movement[1])
                         
                         # Ensure bbox stays within frame bounds
-                        new_x = max(0, min(new_x, frame_width - w))
-                        new_y = max(0, min(new_y, frame_height - h))
+                        new_x = max(0, min(new_x, self.frame_width - w))
+                        new_y = max(0, min(new_y, self.frame_height - h))
                         
                         drone_bbox = (new_x, new_y, w, h)
                         cx = new_x + w // 2
@@ -467,7 +480,7 @@ class DroneTracker:
         """
         Enhanced frame annotations showing optical flow tracking status.
         """
-        frame_height = frame.shape[0]
+        self.frame_height = frame.shape[0]
         
         # Draw search area limit
         cv.line(frame, (0, self.search_y_limit), (frame.shape[1], self.search_y_limit), (255, 255, 0), 2)
@@ -509,13 +522,13 @@ class DroneTracker:
         
         # Status information
         cv.putText(frame, f"Frame: {frame_num}/{total_frames}", 
-                (10, frame_height - 70), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                (10, self.frame_height - 70), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv.putText(frame, f"Time: {current_time:.2f}s", 
-                (10, frame_height - 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                (10, self.frame_height - 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv.putText(frame, f"Tracking: {tracking_method}", 
-                (10, frame_height - 30), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                (10, self.frame_height - 30), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv.putText(frame, f"OF Active: {'Yes' if optical_flow_active else 'No'}", 
-                (10, frame_height - 10), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                (10, self.frame_height - 10), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
         return frame
 

@@ -142,7 +142,7 @@ def plot_triangulated_points(triangulated_points, main_camera, secondary_camera,
 
 def plot_reprojection_analysis(
     splines_3d, original_points_2d, 
-    R, t, camera_info, camera_id, output_dir="plots", title=None
+    R, t, camera_info, camera_id, output_dir="plots", title=None, initial=False
 ):
     """Plot reprojected 2D points for a single camera."""
     # Reproject points
@@ -181,8 +181,10 @@ def plot_reprojection_analysis(
     plt.ylim(-camera_info.resolution[1], 0)
 
     plt.tight_layout()
-    plt.savefig(f"{output_dir}/reprojection_analysis_camera_{camera_id}.png")
-
+    
+    before_or_after = "_before_ba_" if initial else ""
+    
+    plt.savefig(f"{output_dir}/reprojection_analysis_camera_{camera_id}{before_or_after}.png")
 
 def plot_3d_splines(triangulated_points, correspondences, main_camera_id, secondary_camera_id, output_dir="plots"):
     """Plot 3D splines based on the triangulated points and time-continuity."""

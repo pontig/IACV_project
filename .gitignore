@@ -2,7 +2,7 @@ drone-tracking-datasets/
 .venv/
 __pycache__/
 .vscode/
-plots/
+plots/*.json
 
 detections.csv
 
@@ -10,6 +10,7 @@ logs/
 
 *.npz
 *.mp4
+*.webm
 
 # all Latex development files
 *.aux
