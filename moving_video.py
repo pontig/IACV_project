@@ -4,6 +4,8 @@ import json
 from collections import deque
 import matplotlib.pyplot as plt
 import time
+import sys
+import argparse
 
 
 class DroneTracker:
@@ -534,17 +536,24 @@ class DroneTracker:
 
 
 if __name__ == "__main__":
-    input_path = 'drone-tracking-datasets/dataset1/cam2/cam2.mp4'
-    output_path = 'plots/drone_tracking_output.mp4'
 
-    y_limit = 800
+    parser = argparse.ArgumentParser(description="Drone tracking with background subtraction and optical flow.")
+    parser.add_argument("dataset", type=int, help="Dataset number")
+    parser.add_argument("camera", type=int, help="Camera number")
+    parser.add_argument("--y_limit", type=int, default=1080, help="Y limit for search area (default: 1080)")
+    args = parser.parse_args()
+
+    input_path = f'drone-tracking-datasets/dataset{args.dataset}/cam{args.camera}/cam{args.camera}.mp4'
+    output_path = f'plots/dataset{args.dataset}_cam{args.camera}_tracking_output.mp4'
+    
+    print(f"Got dataset: {args.dataset}, camera: {args.camera}")
 
     tracker = DroneTracker(input_path, output_path)
-    tracker.search_y_limit = y_limit
+    tracker.search_y_limit = args.y_limit
     tracker.process_video()
 
     tracker_of = DroneTracker(input_path, output_path.replace('.mp4', '_optical_flow.mp4'))
-    tracker_of.search_y_limit = y_limit
+    tracker_of.search_y_limit = args.y_limit
     tracker_of.process_video_with_optical_flow()
-    
+
     print("Drone tracking completed successfully.")

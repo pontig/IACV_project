@@ -132,7 +132,7 @@ To improve robustness, especially during frames where the drone was not clearly 
     \label{fig:drone_detection}
 \end{figure}
 
-{\color{red} YOLO?}
+{\color{red} To achieve this result, it is also possible to use a deep learning-based object detection algorithm, such as YOLO or SSD, that could give better results in terms of accuracy and robustness. However, since these are not strictly computer vision algorithms, we decided to not use them in this project.}
 
 \subsubsection*{Results}
 \label{sec:drone_detection_results}
@@ -157,8 +157,12 @@ Due to the limitations of the detection algorithm, we decided to use the drone d
 
 The next step was to reconstruct the drone's trajectory by loading all the detections in memory and then applying the reconstruction algorithm.
 
-    {\color{red} data loading con rectification?}
+\subsubsection{Data loading}
 \label{sec:data_loading}
+
+The first step was to load the drone detections from the dataset. The dataset provides the drone detections in various TXT files, divided in the repo by dataset and camera. Each TXT file was automatically fetched and parsed, extracting the drone detections and frame indexes. In order to correctly handle the data and perform all the necessary operations, we decided to undistort the drone detections using the intrinsic parameters provided in the dataset at this stage. The intrinsic parameters were loaded from the calibration files provided in the dataset, and the drone detections were undistorted using OpenCV's \texttt{undistortPoints} function.
+
+The undistorted drone detections were then saved in a CSV file, unique for each dataset, with the same columns as the original TXT files (frame index, x coordinate, y coordinate) with the addition of the camera index. This allowed us to easily access the drone detections for each camera and perform the necessary operations on them, both in the offline and online trajectory reconstruction algorithms.
 
 \subsubsection{Temporal shift estimation}
 
@@ -238,15 +242,6 @@ Once each new camera was registered, we could extend the 3D splines to include t
 Since the procedure described above was prune to accumulate errors, we applied a bundle adjustment step to refine the 3D points and camera poses. This was done by interpolating the 3D splines at the timestamps of the detections in each camera, and then using the 2D-3D correspondences to minimize the reprojection error. The optimization was performed by Python's \texttt{scipy.optimize.least\_squares} function, which allowed us to minimize the error in a robust and efficient way. The effects of the bundle adjustment can be seen in Figure \ref{fig:reprojection_analysis}.
 
 The bundle adjustment was performed for each registered camera every time a new camera was added.\\
-
-{\color{red} TODO: move these bulky plots to the final pages}
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=0.8\textwidth]{../plots/dataset4/reprojection_analysis_camera_0_before_ba_.png}
-    \includegraphics[width=0.8\textwidth]{../plots/dataset4/reprojection_analysis_camera_0.png}
-    \caption{Reprojection error analysis for camera 0 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment}
-    \label{fig:reprojection_analysis}
-\end{figure}
 
 After all cameras were registered, we should have had a complete 3D trajectory of the drone, with all cameras registered in the same global frame and all 3D points visible from at least two cameras. However, the implemented approach suffered from some limitations, that we are going to discuss in section \ref{sec:limitations}.
 
@@ -339,14 +334,6 @@ Another limitation of the offline trajectory reconstruction is that the process 
     \label{fig:splines_discontinuity}
 \end{figure}
 
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=0.6\textwidth]{../plots/dataset4/reprojection_analysis_camera_1_before_ba_.png}
-    \includegraphics[width=0.6\textwidth]{../plots/dataset4/reprojection_analysis_camera_1.png}
-    \caption{Reprojection error analysis for camera 1 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment. It is clear that the bundle adjustment completely fails to refine the trajectory, as the 3D splines are not consistent}
-    \label{fig:bad_ba}
-\end{figure}
-
 This problem triggered a cascade effect: the inaccuracies in the 3D splines led to poor triangulation of new points, which in turn caused further inaccuracies in the camera poses.
 
 \subsection{Online Trajectory Reconstruction}
@@ -366,13 +353,6 @@ The lower number of correspondences available for each camera pair made the comp
 
 The 3D splines were so noisy that the bundle adjustment step actually worsened the results, introducing more errors instead of correcting them. This effect is illustrated in Figure \ref{fig:bad_ba_online}. This cycle of errors often led to the inability to produce a trajectory at all (Figure \ref{fig:bad_ba_online_failed}).
 
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=0.6\textwidth]{imgs/online_no_ba_cam2.png}
-    \includegraphics[width=0.6\textwidth]{imgs/online_ba_cam2.png}
-    \caption{Reprojection error for camera 2 (dataset 4): before (top) and after (bottom) bundle adjustment. The bundle adjustment worsens the results, most likely due to the noisy (although plausible) 3D splines}
-    \label{fig:bad_ba_online}
-\end{figure}
 \begin{figure}[h]
     \centering
     \includegraphics[width=0.5\textwidth]{imgs/online_failed_due_to_ba.png}
@@ -401,9 +381,85 @@ Said that, in order to run the code, you need to have all the Python dependencie
 pip install -r requirements.txt
 \end{verbatim}
 
-\subsection{Offline}
+\subsection{Drone Detection}
 
-The offline trajectory reconstruction is implemented as a set of Python scripts that can be run from the command line
+The drone detection algorithm can be run by executing a single Python script, with appropriate arguments:
+
+\begin{verbatim}
+python moving_video.py [-h] [--y_limit Y_LIMIT] dataset camera
+
+Drone tracking with background subtraction and optical flow.
+
+positional arguments:
+  dataset            Dataset number
+  camera             Camera number
+
+options:
+  --y_limit Y_LIMIT  Y limit for search area (default: 1080)
+\end{verbatim}
+
+This script will save in the \texttt{plots/} folder a \texttt{.mp4} video with the drone detections overlaid on the original video, a \texttt{.json} file with the drone detections, and an image with the analysis of the results of the background subtraction algorithm, and the same set of files for the optical flow algorithm.
+
+\subsection{Offline Trajectory Reconstruction}
+
+The offline trajectory reconstruction can be run in a similar way, by executing the following command:
+
+\begin{verbatim}
+python main.py [-h] dataset_no
+
+3D Spline Reconstruction
+
+positional arguments:
+  dataset_no  Dataset number to use
+\end{verbatim}
+
+This script will execute all the steps described in above, saving all the results in the \texttt{plots/} folder. To see the results, in a more interactive way, you can uncomment the very last line of the script, which will display all the intermediate results (Note: this will open a lot of windows, so it is recommended to comment it back after you are done).
+
+\subsection{Online Trajectory Reconstruction}
+
+The online trajectory reconstruction is a bit more complex, as it requires ROS2 to be installed and running. 
+
+The code is structured in a ROS2 package, that has to be put in the \texttt{src/} folder of a ROS2 workspace. To run the online trajectory reconstruction, you need to follow these steps (assuming you are in the ROS2 workspace root directory):
+
+\begin{verbatim}
+colcon build
+source install/setup.bash
+ros2 run drones drones
+ros2 bag play <path_to_the_bag_file> -r 1.5
+\end{verbatim}
+
+This will start the ROS2 node that reconstructs the drone trajectory in real-time, and it will replay the bag file containing the drone detections (the bag file is already provided in the repository). The rate of the replay can be adjusted with the \texttt{-r} option, but we suggest to keep it at 1.5x the original speed, as this is the speed that most closely resembles the real-time time flow of the dataset.
+
+To keep the node implementation as simple as possible, instead of following the ROS2 conventions and having a launch file and a configuration file, we decided to hardcode the parameters in the node itself. This means that you will have to modify the first lines of the \texttt{drones.py} file to change the parameters of the algorithm.
+
+\section*{Bulky Plots}
+
+In order to keep the report clean and readable, we decided to move the bulkiest plots to the end of the document
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_0_before_ba_.png}
+    \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_0.png}
+    \caption{Reprojection error analysis for camera 0 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment}
+    \label{fig:reprojection_analysis}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{imgs/online_no_ba_cam2.png}
+    \includegraphics[width=\textwidth]{imgs/online_ba_cam2.png}
+    \caption{Reprojection error for camera 2 (dataset 4): before (top) and after (bottom) bundle adjustment. The bundle adjustment worsens the results, most likely due to the noisy (although plausible) 3D splines}
+    \label{fig:bad_ba_online}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_1_before_ba_.png}
+    \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_1.png}
+    \caption{Reprojection error analysis for camera 1 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment. It is clear that the bundle adjustment completely fails to refine the trajectory, as the 3D splines are not consistent}
+    \label{fig:bad_ba}
+\end{figure}
+
 
 % \appendix
 % \newpage

@@ -18,6 +18,7 @@ from data_loader import load_dataframe
 from global_fn import *
 from plotter import *
 from bundle_adjustment import bundle_adjust_camera_pose
+import argparse
 
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
@@ -39,7 +40,11 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 # Add both handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
-DATASET_NO = 4
+parser = argparse.ArgumentParser(description="3D Offline Spline Reconstruction")
+parser.add_argument("dataset_no", type=int, help="Dataset number to use")
+args = parser.parse_args()
+
+DATASET_NO = args.dataset_no
 plot_output_dir = f"plots/dataset{DATASET_NO}"
 os.makedirs(plot_output_dir, exist_ok=True)
 
