@@ -82,6 +82,7 @@ Our project closely follows the methodology outlined in the paper, but it is not
         \hline
         \textbf{Paper aspect}                           & \textbf{Implemented} & \textbf{Notes}                                                                                                     \\
         \hline
+        Camera intrinsic calibration                     & Yes                  & The paper assumes that the cameras are precalibrated \\ \hline
         Drone detection                                 & Yes                  & In the paper it is not explained how the drone is detected, they focus only on the trajectory reconstruction.      \\\hline
         Time shift estimation                           & Yes                  & We implemented a simple brute-force search algorithm, while the paper uses a solver implemented by another author. \\\hline
         Camera registration                             & Yes                  &                                                                                                                    \\\hline
@@ -107,6 +108,7 @@ The dataset used for this project is the same used and described in the paper, t
 We decided to focus on three mein aspects of the pipeline:
 
 \begin{itemize}
+    \item \textbf{Camera intrinsic calibration:} A method to calibrate the cameras and obtain their intrinsic parameters
     \item \textbf{Drone detection:} An algorithm to detect the drone in each frame of the videos, which is crucial for tracking its trajectory.
     \item \textbf{Offline trajectory reconstruction:} A method to reconstruct the drone's trajectory a posteriori, using the detected drone positions from multiple cameras.
     \item \textbf{Online trajectory reconstruction:} A real-time implementation that reconstructs the drone's trajectory as it flies, using the same detection and reconstruction methods.
@@ -115,6 +117,21 @@ We decided to focus on three mein aspects of the pipeline:
 All the aspects are implemented in Python, heavily relying on the OpenCV library for computer vision tasks. The code is structured in a modular way, allowing for easy integration and testing of each component.
 
 Below is a detailed description of each aspect of the implementation. We also included some results and plots to illustrate the performance of the algorithms. The full plots and results can be found in the `plots` folder of the archive attached to this report.
+
+\subsection{Camera Intrinsic Calibration}
+
+The first step in the pipeline is to calibrate the cameras and obtain their intrinsic parameters. This is crucial for the subsequent steps, as the intrinsic parameters are used to undistort the drone detections and to compute the projection matrices for each camera.
+
+The paper assumes that the cameras are precalibrated, since it is a quite easy task to perform with a chessboard pattern. However, for the completeness of the project, we decided to implement a simple yet effective camera intrinsic calibration method, based on the OpenCV library.
+
+The calibration process follows Zhang et al.'s method, which uses a chessboard pattern to estimate the intrinsic parameters of the camera. All the necessary steps are already implemented in the OpenCV library, so we only had to write a simple script to load the images, detect the chessboard corners, compute the intrinsic parameters, and output a couple of files containing the comparison between the computed intrinsic parameters and the ground truth values provided in the dataset.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.6\textwidth]{../plots/intrinsic_calibration/gopro3_first_detection.png}
+    \caption{Example of the chessboard corners detected in the gopro3 camera}
+    \label{fig:chessboard_detection}
+\end{figure}
 
 \subsection{Drone Detection}
 
@@ -126,8 +143,8 @@ To improve robustness, especially during frames where the drone was not clearly 
 
 \begin{figure}[h]
     \centering
-    \includegraphics[width=.6\textwidth]{imgs/drone_detection_bs.png}
-    \includegraphics[width=.6\textwidth]{imgs/drone_detection_of.png}
+    \includegraphics[width=.8\textwidth]{imgs/drone_detection_bs.png}
+    \includegraphics[width=.8\textwidth]{imgs/drone_detection_of.png}
     \caption{Drone detection results using background subtraction (top) and optical flow tracking (bottom)}
     \label{fig:drone_detection}
 \end{figure}
@@ -146,7 +163,7 @@ The drone detection algorithm was evaluated on some videos from the dataset, and
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=\textwidth]{../plots/drone_tracking_output_trajectory.png}
+    \includegraphics[width=\textwidth]{imgs/drone_tracking_output_trajectory.png}
     \caption{Analysis of the drone detection algorithm on a video from the dataset (Dataset 1, cam 2). It is clear the heavy presence of false positives, as the algorithm often detects birds and other moving objects as the drone. The velocity of the detected object is also shown, which could be used to filter out false positives.}
     \label{fig:detection_plots}
 \end{figure}
@@ -160,9 +177,9 @@ The next step was to reconstruct the drone's trajectory by loading all the detec
 \subsubsection{Data loading}
 \label{sec:data_loading}
 
-The first step was to load the drone detections from the dataset. The dataset provides the drone detections in various TXT files, divided in the repo by dataset and camera. Each TXT file was automatically fetched and parsed, extracting the drone detections and frame indexes. In order to correctly handle the data and perform all the necessary operations, we decided to undistort the drone detections using the intrinsic parameters provided in the dataset at this stage. The intrinsic parameters were loaded from the calibration files provided in the dataset, and the drone detections were undistorted using OpenCV's \texttt{undistortPoints} function.
+The first step was to load the drone detections from the dataset. The dataset provides the drone detections in various \texttt{txt} files, divided in the repo by dataset and camera. Each \texttt{txt} file was automatically fetched and parsed, extracting the drone detections and frame indexes. In order to correctly handle the data and perform all the necessary operations, we decided to undistort the drone detections using the intrinsic parameters provided in the dataset at this stage. The intrinsic parameters were loaded from the calibration files provided in the dataset, and the drone detections were undistorted using OpenCV's \texttt{undistortPoints} function.
 
-The undistorted drone detections were then saved in a CSV file, unique for each dataset, with the same columns as the original TXT files (frame index, x coordinate, y coordinate) with the addition of the camera index. This allowed us to easily access the drone detections for each camera and perform the necessary operations on them, both in the offline and online trajectory reconstruction algorithms.
+The undistorted drone detections were then saved in a \texttt{.csv} file, unique for each dataset, with the same columns as the original \texttt{txt} files (frame index, x coordinate, y coordinate) with the addition of the camera index. This allowed us to easily access the drone detections for each camera and perform the necessary operations on them, both in the offline and online trajectory reconstruction algorithms.
 
 \subsubsection{Temporal shift estimation}
 
@@ -254,7 +271,7 @@ The paper also suggest the implementation of an online trajectory reconstruction
 In this case, we needed to simulate the stream of data from the cameras, as if it were coming from a real-time video feed. To do this, we choose to use ROS2 as the framework to handle the data stream, and we implemented a ROS2 node that receives the drone detections from every camera and reconstructs the trajectory in real-time.
 To simulate a real-time data stream, we performed the following data preprocessing steps:
 \begin{itemize}
-    \item We loaded the drone detections from the CSV file described in Section~\ref{sec:data_loading}.
+    \item We loaded the drone detections from the \texttt{.csv} file described in Section~\ref{sec:data_loading}.
     \item For each camera and each detection, we computed the global timestamp by applying the $\alpha$ and $\beta$ parameters provided in the dataset, ensuring robustness to timing inconsistencies.
     \item We sorted all detections by their global timestamps and created a list of messages to be stored in a ROS2 bag file.
 \end{itemize}
@@ -360,13 +377,15 @@ The 3D splines were so noisy that the bundle adjustment step actually worsened t
     \label{fig:bad_ba_online_failed}
 \end{figure}
 
-A new issue was also introduced by the real-time nature of the implementation: the algorithm was not able to correctly handle the fisheye camera (gopro3); we think that this was due to the fact that the fisheye camera was calibrated as a pinhole camera, and therefore the computation of its distortion coefficients in the intrinsic calibration step was not accurate enough. To mitigate this issue, we decided to ignore the fisheye camera in the online trajectory reconstruction, as it was not essential for the trajectory reconstruction. In future work, we could try to distinct between pinhole and fisheye cameras, and apply a different rectification method for each type of camera.
+A new issue was also introduced by the real-time nature of the implementation: the algorithm was not able to correctly handle the fisheye camera (gopro3); we think that this was due to the fact that the fisheye camera was calibrated as a pinhole camera, and therefore the computation of its distortion coefficients in the intrinsic calibration step was not accurate enough. To mitigate this issue, we decided to ignore the fisheye camera in the online trajectory reconstruction, as it was not essential for the trajectory reconstruction. In future work, we could try to distinct between pinhole and fisheye cameras, and apply a different rectification method for each type of camera.\\
+
+The dataset also provided the ground truth trajectory for the drone in some case. Unfortunately, due to the limitations above mentioned for both methods, the reconstructed trajectory was not accurate enough to be compared with the ground truth, so we had to skip the comparison step. However, we can still qualitatively assess the performance of the algorithm by visualizing the reconstructed trajectory in 3D space, as shown in Figures \ref{fig:online_full_trajectory}, \ref{fig:3d_splines_extension}.
 
 \section{Instructions to run the code}
 
 Since we implemented both the offline and online trajectory reconstruction algorithms, we provided two different scripts to run them.
 
-\subsection{Directory structure}
+\subsection{Environment setup}
 
 Since the project relies on the dataset provided by the authors of the paper that is publicly available on GitHub (and, moreover, quite large), we decided to not include it in the repository. We directly cloned the dataset repository in the root directory of our project, and made some little modifications:
 
@@ -380,6 +399,16 @@ Said that, in order to run the code, you need to have all the Python dependencie
 \begin{verbatim}
 pip install -r requirements.txt
 \end{verbatim}
+
+\subsection{Camera Intrinsic Calibration}
+
+The camera intrinsic calibration can be run by executing the following command:
+
+\begin{verbatim}
+python camera_calib.py
+\end{verbatim}
+
+This script will automatically load the checkerboard images from the dataset, detect the corners, compute the intrinsic parameters, and save both the intrinsic parameters (in a \texttt{json} file) and the plots showing the comparison between the computed intrinsic parameters and the ground truth values provided in the dataset. The plots will be saved in the \texttt{plots/intrinsic\_calibration/} folder.
 
 \subsection{Drone Detection}
 
@@ -398,7 +427,7 @@ options:
   --y_limit Y_LIMIT  Y limit for search area (default: 1080)
 \end{verbatim}
 
-This script will save in the \texttt{plots/} folder a \texttt{.mp4} video with the drone detections overlaid on the original video, a \texttt{.json} file with the drone detections, and an image with the analysis of the results of the background subtraction algorithm, and the same set of files for the optical flow algorithm.
+This script will save in the \texttt{plots/} folder a \texttt{.mp4} video with the drone detections overlaid on the original video (image \ref{fig:drone_detection} is a frame of this video), a \texttt{json} file with the drone detections, and an image with the analysis of the results of the background subtraction algorithm (image \ref{fig:detection_plots}), and the same set of files for the optical flow algorithm.
 
 \subsection{Offline Trajectory Reconstruction}
 
@@ -414,6 +443,8 @@ positional arguments:
 \end{verbatim}
 
 This script will execute all the steps described in above, saving all the results in the \texttt{plots/} folder. To see the results, in a more interactive way, you can uncomment the very last line of the script, which will display all the intermediate results (Note: this will open a lot of windows, so it is recommended to comment it back after you are done).
+
+In the first step, the script will check the existence of a \texttt{.csv} file with the results of the $\beta$ search, and if it does not exist, it will run the temporal shift estimation algorithm, that is quite time consuming, even if it is heavily parallelized. For this reason, we suggest not to delete the \texttt{.csv} files named \texttt{beta_results_dataset\_X.csv}.
 
 \subsection{Online Trajectory Reconstruction}
 
@@ -440,7 +471,7 @@ In order to keep the report clean and readable, we decided to move the bulkiest 
     \centering
     \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_0_before_ba_.png}
     \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_0.png}
-    \caption{Reprojection error analysis for camera 0 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment}
+    \caption{Offline approach - Reprojection error analysis for camera 0 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment}
     \label{fig:reprojection_analysis}
 \end{figure}
 
@@ -448,7 +479,7 @@ In order to keep the report clean and readable, we decided to move the bulkiest 
     \centering
     \includegraphics[width=\textwidth]{imgs/online_no_ba_cam2.png}
     \includegraphics[width=\textwidth]{imgs/online_ba_cam2.png}
-    \caption{Reprojection error for camera 2 (dataset 4): before (top) and after (bottom) bundle adjustment. The bundle adjustment worsens the results, most likely due to the noisy (although plausible) 3D splines}
+    \caption{Online approach - Reprojection error for camera 2 (dataset 4): before (top) and after (bottom) bundle adjustment. The bundle adjustment worsens the results, most likely due to the noisy (although plausible) 3D splines}
     \label{fig:bad_ba_online}
 \end{figure}
 
@@ -456,7 +487,7 @@ In order to keep the report clean and readable, we decided to move the bulkiest 
     \centering
     \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_1_before_ba_.png}
     \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_1.png}
-    \caption{Reprojection error analysis for camera 1 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment. It is clear that the bundle adjustment completely fails to refine the trajectory, as the 3D splines are not consistent}
+    \caption{Offline approach - Reprojection error analysis for camera 1 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment. It is clear that the bundle adjustment completely fails to refine the trajectory, as the 3D splines are not consistent}
     \label{fig:bad_ba}
 \end{figure}
 
