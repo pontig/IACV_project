@@ -71,18 +71,18 @@ The pipeline begins by detecting the UAV in each video and generating approximat
 
 This approach represents a significant advancement in practical UAV tracking by eliminating the need for prior camera synchronization or rigid installation constraints, making it suitable for scalable and cost-effective deployments in real-world outdoor environments.
 
-\section{Compoarison with the original work}
+\section{Comparison with the original work}
 
-Our project closely follows the methodology outlined in the paper, but it is not as complete as the original work. Below is a comparison of the main differences between our implementation and the original work:
+Our project closely follows the methodology outlined in the paper, but it is not as complete as the original work. Table \ref{tab:comparison} shows a comparison of the main differences between our implementation and the original work:
 
-\begin{table}[H]
+\begin{table}[h]
     \centering
     \renewcommand{\arraystretch}{1.2}
     \begin{tabularx}{\textwidth}{|Y|c|Y|}
         \hline
         \textbf{Paper aspect}                           & \textbf{Implemented} & \textbf{Notes}                                                                                                     \\
         \hline
-        Camera intrinsic calibration                     & Yes                  & The paper assumes that the cameras are precalibrated \\ \hline
+        Camera intrinsic calibration                    & Yes                  & The paper assumes that the cameras are precalibrated                                                               \\ \hline
         Drone detection                                 & Yes                  & In the paper it is not explained how the drone is detected, they focus only on the trajectory reconstruction.      \\\hline
         Time shift estimation                           & Yes                  & We implemented a simple brute-force search algorithm, while the paper uses a solver implemented by another author. \\\hline
         Camera registration                             & Yes                  &                                                                                                                    \\\hline
@@ -105,7 +105,7 @@ Our implementation of the project closely follows the methodology outlined in th
 
 The dataset used for this project is the same used and described in the paper, that is accessible at \url{https://github.com/CenekAlbl/drone-tracking-datasets}
 
-We decided to focus on three mein aspects of the pipeline:
+We decided to focus on three main aspects of the pipeline:
 
 \begin{itemize}
     \item \textbf{Camera intrinsic calibration:} A method to calibrate the cameras and obtain their intrinsic parameters
@@ -116,7 +116,7 @@ We decided to focus on three mein aspects of the pipeline:
 
 All the aspects are implemented in Python, heavily relying on the OpenCV library for computer vision tasks. The code is structured in a modular way, allowing for easy integration and testing of each component.
 
-Below is a detailed description of each aspect of the implementation. We also included some results and plots to illustrate the performance of the algorithms. The full plots and results can be found in the `plots` folder of the archive attached to this report.
+Below is a detailed description of each aspect of the implementation. We also included some results and plots to illustrate the performance of the algorithms. The full plots and results can be found in the \texttt{plots/} folder of the archive attached to this report.
 
 \subsection{Camera Intrinsic Calibration}
 
@@ -126,9 +126,9 @@ The paper assumes that the cameras are precalibrated, since it is a quite easy t
 
 The calibration process follows Zhang et al.'s method, which uses a chessboard pattern to estimate the intrinsic parameters of the camera. All the necessary steps are already implemented in the OpenCV library, so we only had to write a simple script to load the images, detect the chessboard corners, compute the intrinsic parameters, and output a couple of files containing the comparison between the computed intrinsic parameters and the ground truth values provided in the dataset.
 
-\begin{figure}
+\begin{figure}[H]
     \centering
-    \includegraphics[width=0.6\textwidth]{../plots/intrinsic_calibration/gopro3_first_detection.png}
+    \includegraphics[width=0.75\textwidth]{../plots/intrinsic_calibration/gopro3_first_detection.png}
     \caption{Example of the chessboard corners detected in the gopro3 camera}
     \label{fig:chessboard_detection}
 \end{figure}
@@ -141,15 +141,16 @@ Initially, the drone was detected using a classical background subtraction metho
 
 To improve robustness, especially during frames where the drone was not clearly visible or briefly occluded, we integrated optical flow tracking using the Lucas-Kanade method. After an initial detection via background subtraction, we initialized tracking by identifying good features within the drone's bounding box. Between consecutive frames, these features were tracked to estimate the drone's displacement, allowing us to update its position even in the absence of fresh detections. We incorporated validation checks to assess confidence in the optical flow results and fall back to background subtraction when necessary. This hybrid approach significantly enhanced the continuity and accuracy of the trajectory, particularly during challenging segments of the video sequence, and reduced the frequency of detection failures.
 
-\begin{figure}[h]
+\begin{figure}[H]
     \centering
-    \includegraphics[width=.8\textwidth]{imgs/drone_detection_bs.png}
-    \includegraphics[width=.8\textwidth]{imgs/drone_detection_of.png}
-    \caption{Drone detection results using background subtraction (top) and optical flow tracking (bottom)}
+    \includegraphics[width=.75\textwidth]{imgs/drone_detection_bs.png}
+    \includegraphics[width=.75\textwidth]{imgs/drone_detection_of.png}
+    \includegraphics[width=.75\textwidth]{imgs/drone_detection_yolo.png}
+    \caption{Drone detection results using background subtraction (top), optical flow tracking (middle), and YOLOv8 (bottom)}
     \label{fig:drone_detection}
 \end{figure}
 
-{\color{red} To achieve this result, it is also possible to use a deep learning-based object detection algorithm, such as YOLO or SSD, that could give better results in terms of accuracy and robustness. However, since these are not strictly computer vision algorithms, we decided to not use them in this project.}
+To achieve this result, it is also possible to use a deep learning-based object detection algorithm, such as YOLO or SSD, that could give better results in terms of accuracy and robustness. We decided to use YOLOv8, which is a state-of-the-art object detection algorithm. We used the pre-trained weights provided by the \texttt{yolov8n}, which is a small and fast version of YOLOv8, without fine tuning.
 
 \subsubsection*{Results}
 \label{sec:drone_detection_results}
@@ -157,8 +158,9 @@ To improve robustness, especially during frames where the drone was not clearly 
 The drone detection algorithm was evaluated on some videos from the dataset, and the results were imperfect but promising. The main limitations were:
 
 \begin{itemize}
-    \item In the majority of the frames, the algorithm identified the partially visible grass as the drone, because it was moved by the wind. This problem was mitigated by applying a threshold on the area of the detected object, to be set for each video.
+    \item In the majority of the frames, the algorithm identified the partially visible grass as the drone, because it was moved by the wind. This problem was mitigated by applying a threshold on the area of the detected object, to be set for each video (light blue line in Figure \ref{fig:drone_detection})
     \item The algorithm often mistook the drone for other moving objects in the scene, such as birds. Unfortunately, this problem could not be solved, as the drone was often too small in the frame to be distinguished from other objects. To partially mitigate this issue, we saved also the velocity of the detected object for each frame (as shown in \ref{fig:detection_plots}), and we think that this information could be used to filter out false positives
+    \item The deep learning-based detection algorithm completely removed the false positives, but it was not able to detect the drone in some frames, especially when the drone was too small in the frame, as shown in Figure \ref{fig:yolo_analysis}
 \end{itemize}
 
 \begin{figure}[H]
@@ -166,6 +168,13 @@ The drone detection algorithm was evaluated on some videos from the dataset, and
     \includegraphics[width=\textwidth]{imgs/drone_tracking_output_trajectory.png}
     \caption{Analysis of the drone detection algorithm on a video from the dataset (Dataset 1, cam 2). It is clear the heavy presence of false positives, as the algorithm often detects birds and other moving objects as the drone. The velocity of the detected object is also shown, which could be used to filter out false positives.}
     \label{fig:detection_plots}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{imgs/yolo_analysis.png}
+    \caption{Analysis of the drone detection algorithm using YOLOv8 on a video from the dataset (Dataset 1, cam 2)}
+    \label{fig:yolo_analysis}
 \end{figure}
 
 Due to the limitations of the detection algorithm, we decided to use the drone detections already given in the dataset. This allowed us to focus on the trajectory reconstruction aspect of the project.
@@ -256,7 +265,7 @@ Once each new camera was registered, we could extend the 3D splines to include t
 
 \subsubsection{Bundle Adjustment}
 
-Since the procedure described above was prune to accumulate errors, we applied a bundle adjustment step to refine the 3D points and camera poses. This was done by interpolating the 3D splines at the timestamps of the detections in each camera, and then using the 2D-3D correspondences to minimize the reprojection error. The optimization was performed by Python's \texttt{scipy.optimize.least\_squares} function, which allowed us to minimize the error in a robust and efficient way. The effects of the bundle adjustment can be seen in Figure \ref{fig:reprojection_analysis}.
+Since the procedure described above was prone to accumulate errors, we applied a bundle adjustment step to refine the 3D points and camera poses. This was done by interpolating the 3D splines at the timestamps of the detections in each camera, and then using the 2D-3D correspondences to minimize the reprojection error. The optimization was performed by Python's \texttt{scipy.optimize.least\_squares} function, which allowed us to minimize the error in a robust and efficient way. The effects of the bundle adjustment can be seen in Figure \ref{fig:reprojection_analysis}.
 
 The bundle adjustment was performed for each registered camera every time a new camera was added.\\
 
@@ -444,11 +453,11 @@ positional arguments:
 
 This script will execute all the steps described in above, saving all the results in the \texttt{plots/} folder. To see the results, in a more interactive way, you can uncomment the very last line of the script, which will display all the intermediate results (Note: this will open a lot of windows, so it is recommended to comment it back after you are done).
 
-In the first step, the script will check the existence of a \texttt{.csv} file with the results of the $\beta$ search, and if it does not exist, it will run the temporal shift estimation algorithm, that is quite time consuming, even if it is heavily parallelized. For this reason, we suggest not to delete the \texttt{.csv} files named \texttt{beta_results_dataset\_X.csv}.
+In the first step, the script will check the existence of a \texttt{.csv} file with the results of the $\beta$ search, and if it does not exist, it will run the temporal shift estimation algorithm, that is quite time consuming, even if it is heavily parallelized. For this reason, we suggest not to delete the \texttt{.csv} files named \texttt{beta\_results\_dataset\_X.csv}.
 
 \subsection{Online Trajectory Reconstruction}
 
-The online trajectory reconstruction is a bit more complex, as it requires ROS2 to be installed and running. 
+The online trajectory reconstruction is a bit more complex, as it requires ROS2 to be installed and running.
 
 The code is structured in a ROS2 package, that has to be put in the \texttt{src/} folder of a ROS2 workspace. To run the online trajectory reconstruction, you need to follow these steps (assuming you are in the ROS2 workspace root directory):
 
@@ -462,6 +471,12 @@ ros2 bag play <path_to_the_bag_file> -r 1.5
 This will start the ROS2 node that reconstructs the drone trajectory in real-time, and it will replay the bag file containing the drone detections (the bag file is already provided in the repository). The rate of the replay can be adjusted with the \texttt{-r} option, but we suggest to keep it at 1.5x the original speed, as this is the speed that most closely resembles the real-time time flow of the dataset.
 
 To keep the node implementation as simple as possible, instead of following the ROS2 conventions and having a launch file and a configuration file, we decided to hardcode the parameters in the node itself. This means that you will have to modify the first lines of the \texttt{drones.py} file to change the parameters of the algorithm.
+
+\section{Conclusions}
+
+This project presents a robust and modular implementation of a drone trajectory reconstruction pipeline, inspired by state-of-the-art methods in outside-in tracking with unsynchronized cameras. The implementation covers key components, with careful integration of computer vision tools and frameworks like OpenCV and ROS2. Although the pipeline suffers from several limitations, it demonstrates strong potential for scalable, low-cost UAV tracking in real-world conditions.
+
+Future improvements could focus on refining the bundle adjustment process to incorporate motion regularization, improving robustness to camera variability, and enhancing the detection component for better performance in occluded or low-visibility scenarios. Despite the challenges, this work serves as a strong foundation for further research and development in drone tracking systems using consumer-grade equipment.
 
 \section*{Bulky Plots}
 
@@ -490,6 +505,7 @@ In order to keep the report clean and readable, we decided to move the bulkiest 
     \caption{Offline approach - Reprojection error analysis for camera 1 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment. It is clear that the bundle adjustment completely fails to refine the trajectory, as the 3D splines are not consistent}
     \label{fig:bad_ba}
 \end{figure}
+
 
 
 % \appendix
