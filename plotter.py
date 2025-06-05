@@ -7,7 +7,8 @@ def plot_refinement_process(beta_values_coarse, inliers_coarse, best_beta_coarse
                             beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
                             beta_values_finer, inliers_finer, best_beta_finer, max_inliers_finer,
                             beta_values_finest, inliers_finest, best_beta_finest, max_inliers_finest,
-                            main_camera, secondary_camera, dataset_no):
+                            main_camera, secondary_camera, dataset_no,
+                            output_dir=""):
     """
     Plot the beta search refinement process
     
@@ -82,14 +83,15 @@ def plot_refinement_process(beta_values_coarse, inliers_coarse, best_beta_coarse
     plt.subplots_adjust(top=0.92)
     
     # Create plots directory if it doesn't exist
-    os.makedirs("plots", exist_ok=True)
-    plt.savefig(f"plots/inliers_vs_beta_refinement_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png")
+    os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(f"{output_dir}/inliers_vs_beta_refinement_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png")
 
 def plot_combined_results(beta_values_coarse, inliers_coarse, best_beta_coarse, max_inliers_coarse,
                           beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
                           beta_values_finer, inliers_finer, best_beta_finer, max_inliers_finer,
                           beta_values_finest, inliers_finest, best_beta_finest, max_inliers_finest,
-                          main_camera, secondary_camera, dataset_no):
+                          main_camera, secondary_camera, dataset_no,
+                          output_dir=""):
     """
     Plot combined results of beta search
     
@@ -125,8 +127,8 @@ def plot_combined_results(beta_values_coarse, inliers_coarse, best_beta_coarse, 
     plt.tight_layout()
     
     # Create plots directory if it doesn't exist
-    os.makedirs("plots", exist_ok=True)
-    plt.savefig(f"plots/inliers_vs_beta_combined_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png")
+    os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(f"{output_dir}/inliers_vs_beta_combined_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png")
     plt.close()
 
 def plot_triangulated_points(triangulated_points, main_camera, secondary_camera, output_dir="plots"):
@@ -219,4 +221,53 @@ def plot_3d_splines(triangulated_points, correspondences, main_camera_id, second
     plt.savefig(f"{output_dir}/3d_splines_{main_camera_id}_{secondary_camera_id}.png", dpi=300)
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
+
+def plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera, plot_output_dir="plots"):
+    """
+    Plots 3D splines and triangulated points for a given camera pair and saves the figure.
+    Parameters
+    ----------
+    tpns_to_add_to_3d : np.ndarray
+        Array of shape (N, 3) containing the 3D coordinates of triangulated points to be plotted in blue.
+    splines_3d : list of tuples
+        List where each element is a tuple (spline_x, spline_y, spline_z, ts), representing the spline functions
+        for x, y, z coordinates and the parameter values to evaluate the splines.
+    main_camera : str or int
+        Identifier for the main camera in the pair.
+    new_camera : str or int
+        Identifier for the new camera in the pair.
+    plot_output_dir : str, optional
+        Directory where the output plot will be saved. Default is "plots".
+    Saves
+
+    """
+    # Plot splines in red and triangulated_points in blue
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot triangulated_points in blue
+    ax.scatter(
+        tpns_to_add_to_3d[:, 0], 
+        tpns_to_add_to_3d[:, 1], 
+        tpns_to_add_to_3d[:, 2], 
+        c='blue', s=1, label=f"Triangulated Points for pair main-new {main_camera}-{new_camera}"
+    )
+
+    # Plot splines in red
+    for spline_x, spline_y, spline_z, ts in splines_3d:
+        ax.plot(
+            spline_x(ts), 
+            spline_y(ts), 
+            spline_z(ts), 
+            c='red'
+        )
+
+    # Set plot labels and title
+    ax.set_title("3D Points and Splines Visualization")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.legend()
+    
+    plt.savefig(f"{plot_output_dir}/3d_points_and_splines_{main_camera}_{new_camera}.png")
 

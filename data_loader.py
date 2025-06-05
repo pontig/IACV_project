@@ -191,10 +191,7 @@ def load_dataframe(cameras, dataset_no):
                 data['velocity_x'][j] = velocity_x
                 data['velocity_y'][j] = velocity_y
 
-    print("To dataframe")
     df = pd.DataFrame(data)
-    print("Writing")
     # Filter the dataframe to include only primary and secondary cameras
     df.to_csv('detections.csv', index=False)
-    print("Done")
     return df, splines, contiguous, camera_info

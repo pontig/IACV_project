@@ -28,20 +28,22 @@ class MainNode(Node):
         super().__init__('detections_subscriber')
         
         # PARAMETERS
-        self.min_points_for_spline = 4
-        self.max_time_gap = .5
-        self.cameras_to_ignore = [0] # Camera 3 is the one with the most noise, so we ignore it for now
-        self.min_correspondences = 2000 # 500
-        self.min_accettable_f = 0.8
-        self.possible_values = range(0, 7)
-        self.mode = "CALIBRATION"  
-        self.message_count = 0
-        self.points_to_rviz = 100000
+        self.min_points_for_spline = 4          # Minimum number of points to fit a spline
+        self.max_time_gap = .5                  # Maximum time gap between points to consider them part of the same spline (in seconds)
+        self.cameras_to_ignore_for_F = [0]      # Cameras to ignore when computing the Fundamental matrix (see report) 
+        self.cameras_to_ignore = [3, 0]         # Cameras to ignore for triangulation and localization (see report)
+        self.min_correspondences = 2000         # Minimum number of correspondences to compute the first Fundamental matrix
+        self.min_accettable_f = 0.8             # Minimum acceptable ratio of inliers to total points for the Fundamental matrix
+        self.possible_values = range(0, 7)      # Possible camera IDs
+        self.mode = "CALIBRATION"               # Stage of the node: "CALIBRATION" or "TRACKING"
+        self.message_count = 0                  # Count of messages received
+        self.points_to_rviz = 100000            # Number of points to visualize in RViz
+        self.period_update_splines = 3000       # Update 3D splines every x messages
 
         # ATTRIBUTES INITIALIZATION
         self.camera_calibrations = {cam['camera_id']: cam for cam in camera_calibrations}
         self.point_correspondences = {value: {v: [] for v in self.possible_values} for value in self.possible_values} # Pair of corresponding plints: ((spline_x, spline_y), (pt_x, pt_y), timestamp)
-        self.data_lists = {value: [] for value in self.possible_values} # TODO: remove this, we only need rectified data
+        self.data_lists = {value: [] for value in self.possible_values} 
         self.rectified_data_lists = {value: [[]] for value in self.possible_values}
         self.splines = {value: [] for value in self.possible_values} # Each spline is a tuple (spline_x, spline_y, time_points, data_indices)
         self.localized_cameras = set()  # Cameras that have been localized
@@ -87,15 +89,18 @@ class MainNode(Node):
         
     def publish_pointcloud(self, points, publisher=None):
         """
-        Publish a list of 3D points as a PointCloud2 message.
-        :param points: List of (x, y, z) tuples
+        Publish a list of 3D points as a PointCloud2 message for visualization in RViz.
+
+        :param points: List of (x, y, z) tuples representing 3D points.
+        :param publisher: Optional ROS publisher to use (defaults to self.pointcloud_publisher).
         """
-        # Only publish the last points if the list is longer
+        # Limit the number of points to publish for performance in RViz
         if len(points) > self.points_to_rviz:
             points_to_publish = points[-self.points_to_rviz:]
         else:
             points_to_publish = points
 
+        # Create PointCloud2 message with current timestamp and 'map' frame
         msg = pc2.create_cloud_xyz32(
             std_msgs.msg.Header(
                 stamp=self.get_clock().now().to_msg(),
@@ -103,19 +108,23 @@ class MainNode(Node):
             ),
             points_to_publish
         )
+        # Publish using the provided publisher or the default one
         if publisher is None:
             self.pointcloud_publisher.publish(msg)
         else:
             publisher.publish(msg)
         
     def sendTfStaticTransform(self, camera_id, translation, rotation):
-        """Send the inverse of the given transform for the camera to the TF2 broadcaster (ROS convention)"""
+        """
+        Publish a static transform for a camera to the TF2 broadcaster (ROS convention).
+        The transform is the inverse of the given translation and rotation, mapping from 'map' to 'camera_{camera_id}'.
+        """
         transform = TransformStamped()
         transform.header.stamp = self.get_clock().now().to_msg()
         transform.header.frame_id = 'map'
         transform.child_frame_id = f'camera_{camera_id}'
 
-        # Invert rotation and translation
+        # Compute inverse rotation and translation (camera pose in map frame)
         rot_matrix = rotation
         inv_rot = rot_matrix.T
         inv_trans = -inv_rot @ np.array(translation).reshape(3)
@@ -124,7 +133,7 @@ class MainNode(Node):
         transform.transform.translation.y = float(inv_trans[1])
         transform.transform.translation.z = float(inv_trans[2])
 
-        # Convert rotation matrix to quaternion (scipy returns [x, y, z, w])
+        # Convert rotation matrix to quaternion for ROS
         quat = Rot.from_matrix(inv_rot).as_quat()
         transform.transform.rotation.x = quat[0]
         transform.transform.rotation.y = quat[1]
@@ -161,53 +170,45 @@ class MainNode(Node):
         return pts_normalized
 
     def main_loop(self, msg):
+        # Ignore messages with insufficient data
         if len(msg.data) < 4:
             return
             
         element_1 = int(msg.data[1])  # camera_id
         
-        if element_1 == 3 or element_1 == 0:
-            return
-        
+        # Check if camera_id is valid
         if element_1 not in self.data_lists:
             self.get_logger().warn(f'Value {element_1} not in possible values')
             return
         
         self.message_count += 1
-        
-        # if 330 < msg.data[0] < 330.5:
-        #     threading.Thread(target=self.plotall, daemon=True).start()
 
-        # Create raw data point
+        # Create raw data point: (timestamp, camera_id, x, y)
         raw_point = (msg.data[0], msg.data[1], msg.data[2], msg.data[3])
         
-        # Rectify the point immediately upon arrival
-        rectified_point = raw_point # Points are already in rectified coordinates
+        # Points are already rectified
+        rectified_point = raw_point 
         
-        # Publish the rectified image for this camera with a white dot at the rectified point
+        # Publish the rectified image for this camera with a green dot at the detection
         if element_1 in self.image_publishers:
             image = self.live_detections[element_1].copy()
             cv.circle(image, (int(rectified_point[2]), int(rectified_point[3])), 5, (0, 255, 0), -1)
-            # Convert to ROS Image message
             image_msg = self.cv_bridge.cv2_to_imgmsg(image, encoding='bgr8')
-            # Publish the image
             self.image_publishers[element_1].publish(image_msg)
             self.live_detections[element_1] = image  # Update the live image for this camera
         else:
             self.get_logger().warn(f'No publisher for camera {element_1} - skipping image publishing')
         
-        
-        # First detection from this camera
+        # Log if this is the first detection from this camera
         if len(self.data_lists[element_1]) == 0:
             self.get_logger().info(f'New camera detected: {element_1}')
         
         self.data_lists[element_1].append(raw_point)            
         
-        # Check if we need to start a new time group
         current_camera_data = self.rectified_data_lists[element_1]
         
+        # If in TRACKING mode and camera is localized, try to triangulate new points
         if self.mode == "TRACKING" and element_1 in self.localized_cameras:
-            # Get the last 5 points (flattened) from all groups for this camera
             all_points = self.data_lists[element_1]
             if len(all_points) >= 5:
                 last_points = all_points[-5:]
@@ -221,7 +222,6 @@ class MainNode(Node):
                     for other_camera in self.possible_values:
                         if other_camera == element_1 or not self.rectified_data_lists[other_camera]:
                             continue
-                        # Get last rectified point for this other camera
                         other_points = self.data_lists[other_camera]
                         if not other_points:
                             continue
@@ -236,17 +236,15 @@ class MainNode(Node):
                                 "interp": (interp_x, interp_y),
                                 "other_point": (last_other_point[2], last_other_point[3])
                             })
-                    # tmp_interpolations now contains the interpolated points for each other camera
+                    # Triangulate with all available localized cameras
                     if len(tmp_interpolations) > 0:
                         new_triangulated_points = []
                         for interp in tmp_interpolations:
                             if interp['camera'] in self.localized_cameras:
                                 K1 = self.rectified_camera_matrices[element_1]
                                 K2 = self.rectified_camera_matrices[interp['camera']]
-
                                 P1 = K1 @ np.hstack([self.camera_poses[element_1][1], self.camera_poses[element_1][0].reshape(-1, 1)])
                                 P2 = K2 @ np.hstack([self.camera_poses[interp['camera']][1], self.camera_poses[interp['camera']][0].reshape(-1, 1)])
-                                
                                 pt = cv.triangulatePoints(P1, P2, (raw_point[2], raw_point[3]), interp['other_point'])
                                 pt /= pt[3]
                                 pt = pt[:3].flatten()
@@ -257,33 +255,30 @@ class MainNode(Node):
                                 self.trajectory.append(avg_triangulated_point)
                                 self.trajectory_timestamps.append(raw_point[0])
                             self.publish_pointcloud(self.trajectory)
-            if self.message_count % 3000 == 0:
+            # Periodically recompute 3D splines
+            if self.message_count % self.period_update_splines == 0:
                 self.compute_3d_splines()
         
-        # If the current camera has no data yet, or if the last group is empty
+        # Group points by time proximity for spline fitting
         if not current_camera_data or not current_camera_data[-1]:
             current_camera_data[-1].append(rectified_point)
         else:
-            # Compare timestamps (index 0) to decide if points are close in time
-            last_timestamp = current_camera_data[-1][-1][0]  # timestamp of last point in last group
+            last_timestamp = current_camera_data[-1][-1][0]
             current_timestamp = rectified_point[0]
-            
-            # If timestamps are close (within your threshold), add to current group
             if abs(current_timestamp - last_timestamp) < self.max_time_gap:
                 current_camera_data[-1].append(rectified_point)
             else:
-                # Start a new time group
                 points = current_camera_data[-1]
                 current_camera_data.append([rectified_point])
-                
-                # Create a new spline
+                # Fit a new spline if enough points in the last group
                 if len(points) >= self.min_points_for_spline:
                     times = [p[0] for p in points]
-                    rectified_x = [p[2] for p in points]  # rectified x
-                    rectified_y = [p[3] for p in points]  # rectified y
+                    rectified_x = [p[2] for p in points]
+                    rectified_y = [p[3] for p in points]
                     spline_x = make_interp_spline(times, rectified_x, k=3)
                     spline_y = make_interp_spline(times, rectified_y, k=3)
                     self.splines[element_1].append((spline_x, spline_y, times, list(range(len(points)))))
+                    # If in CALIBRATION mode, try to initialize geometry
                     if self.mode == "CALIBRATION":
                         threading.Thread(
                             target=self.do_first_step,
@@ -306,54 +301,63 @@ class MainNode(Node):
                 self.get_logger().info(f'Pre-computed rectified K for camera {camera_id}') 
                     
     def do_first_step(self, element_1, times, spline_x, spline_y):
+        # Try to find correspondences between this camera and all others
         for other_camera in self.possible_values:
             if other_camera == element_1 or not self.rectified_data_lists[other_camera]:
                 continue
+            # Iterate over all groups of points in the other camera, in reverse order (latest first)
             for other_points in reversed(self.rectified_data_lists[other_camera]):
                 for point in reversed(other_points):
                     if point[0] < times[0]:
-                        break
+                        break  # Stop if point is before the current spline's time window
                     if times[0] <= point[0] <= times[-1]:
+                        # Add correspondence: (spline point, other camera point, timestamp)
                         spline_point = (float(spline_x(point[0])), float(spline_y(point[0])))
                         self.point_correspondences[element_1][other_camera].append((spline_point, (point[2], point[3]), point[0]))
-                        
-            # Try computing the Fundamental matrix 
-            if self.mode == "CALIBRATION" and len(self.point_correspondences[element_1][other_camera]) > self.min_correspondences and other_camera not in self.cameras_to_ignore and element_1 not in self.cameras_to_ignore:
-                
+            
+            # Try computing the Fundamental matrix if enough correspondences are found
+            if (
+                self.mode == "CALIBRATION"
+                and len(self.point_correspondences[element_1][other_camera]) > self.min_correspondences
+                and other_camera not in self.cameras_to_ignore_for_F
+                and element_1 not in self.cameras_to_ignore_for_F
+            ):
                 spline_points = np.array([p[0] for p in self.point_correspondences[element_1][other_camera]], dtype=np.float32)
                 other_points = np.array([p[1] for p in self.point_correspondences[element_1][other_camera]], dtype=np.float32)
                 
                 K1 = self.rectified_camera_matrices[element_1] 
                 K2 = self.rectified_camera_matrices[other_camera]
                 
-                # Find Fundamental Matrix
+                # Estimate Fundamental Matrix using RANSAC
                 F, mask = cv.findFundamentalMat(spline_points, other_points, cv.RANSAC)
                 
+                # Check if the Fundamental matrix is valid and has enough inliers
                 if F is not None and np.sum(mask) / len(mask) > self.min_accettable_f:
-                    self.mode = "TRACKING"                                    
+                    self.mode = "TRACKING"
                     self.get_logger().info(f'Found valid Fundamental matrix between cameras {element_1} and {other_camera} with {len(mask)} correspondences')
                     self.get_logger().info(f'Beginnning localization mode...')
                     self.localized_cameras.add(other_camera)
                     self.localized_cameras.add(element_1)
                     
-                    # Convert to Essential Matrix
+                    # Compute Essential Matrix from Fundamental and intrinsics
                     E = K2.T @ F @ K1
                     
                     # Normalize points for pose recovery
                     pts1_norm = self.to_normalized_camera_coord(spline_points, K1, np.zeros(5))
                     pts2_norm = self.to_normalized_camera_coord(other_points, K2, np.zeros(5))
 
-                    # Recover pose using normalized points
+                    # Recover relative pose (R, t) between the two cameras
                     _, R, t, pose_mask = cv.recoverPose(E, pts1_norm, pts2_norm)
                     
-                    self.camera_poses[element_1] = (np.zeros(3), np.eye(3))  # Initialize camera pose for element_1
-                    self.camera_poses[other_camera] = (t.flatten(), R)  # Store pose for other camera
+                    # Set camera_poses: element_1 at origin, other_camera at (R, t)
+                    self.camera_poses[element_1] = (np.zeros(3), np.eye(3))
+                    self.camera_poses[other_camera] = (t.flatten(), R)
                     
-                    # Create projection matrices for triangulation
+                    # Build projection matrices for triangulation
                     P1 = K1 @ np.hstack([np.eye(3), np.zeros((3, 1))])
                     P2 = K2 @ np.hstack([R, t.reshape(-1, 1)])
                     
-                    # Triangulate using ORIGINAL image coordinates (not normalized)
+                    # Triangulate 3D points from correspondences
                     points_4d = cv.triangulatePoints(P1, P2, spline_points.T, other_points.T)
                     points_3d = (points_4d[:3] / points_4d[3]).T
                     triangulated_points = points_3d
@@ -393,75 +397,75 @@ class MainNode(Node):
                     #     R, t,
                     #     camera_info_2, other_camera, "Reprojection Analysis for Camera {other_camera}")
                     
+                    # Publish static transforms for both cameras (element_1 at origin, other_camera at estimated pose)
                     self.sendTfStaticTransform(element_1, np.zeros(3), np.eye(3))
                     self.sendTfStaticTransform(other_camera, t, R)
                     
+                    # Add triangulated points to the trajectory and publish to RViz
                     self.trajectory.extend(triangulated_points.tolist())
                     self.publish_pointcloud(triangulated_points)
                     self.get_logger().info("Published first cloud")
                     
-                    # 3D SPLINES GEN
-                    # Convert to the format (x, y, z, timestamp)
+                    # Generate 3D splines from triangulated points
+                    # Store timestamps for each triangulated point
                     self.trajectory_timestamps = [p[2] for p in self.point_correspondences[element_1][other_camera]]
                     self.compute_3d_splines()
                     
     def compute_3d_splines(self):
+        # Convert trajectory and timestamps to a single array for processing
         trajectory_np = np.array(self.trajectory)
         points_3d_with_timestamps = np.vstack((trajectory_np.T, self.trajectory_timestamps))
-        points_3d_with_timestamps = points_3d_with_timestamps.T  # Shape (N, 4) where N is number of points
+        points_3d_with_timestamps = points_3d_with_timestamps.T  # Shape (N, 4)
         splines_3d_points = []
         this_spline = []
 
         if len(points_3d_with_timestamps) == 0:
-            # Handle empty case appropriately
             self.get_logger().warn("No triangulated points to generate splines from.")
         else:
+            # Group points into splines based on time gaps
             for i, current_point in enumerate(points_3d_with_timestamps[:-1]):
                 next_point = points_3d_with_timestamps[i + 1]
                 this_spline.append(points_3d_with_timestamps[i])
-
-                # Check if the time difference exceeds the threshold (using same variable names as first method)
+                # Start a new spline if time gap is too large
                 if abs(next_point[3] - current_point[3]) >= self.max_time_gap: 
-                    if len(this_spline) >= self.min_points_for_spline:  # Check minimum points
+                    if len(this_spline) >= self.min_points_for_spline:
                         splines_3d_points.append(this_spline)
                     this_spline = []
-
-            # Append the last triangulated point to the current spline
+            # Add the last point to the current spline
             this_spline.append(points_3d_with_timestamps[-1])
-            if len(this_spline) >= self.min_points_for_spline:  # Check minimum points for last spline
+            if len(this_spline) >= self.min_points_for_spline:
                 splines_3d_points.append(this_spline)
 
-        # Filter out any empty splines or splines with less than required points 
+        # Remove splines that are too short
         splines_3d_points = [spline for spline in splines_3d_points if spline and len(spline) >= self.min_points_for_spline]
 
         splines_3d = []
         for spline_points in splines_3d_points:
             spline_points_i = np.array(spline_points)
             ts = spline_points_i[:, 3]
+            # Ensure timestamps are increasing
             if not np.all(np.diff(ts) > 0):
                 spline_points_i = spline_points_i[::-1]
-            ts = spline_points_i[:, 3]  # Use timestamps from triangulated points
-
-            
-            if len(ts) < self.min_points_for_spline:  # Use consistent variable name
-                continue  # Skip if not enough points for spline fitting
-            
+            ts = spline_points_i[:, 3]
+            if len(ts) < self.min_points_for_spline:
+                continue
+            # Fit cubic splines for x, y, z over time
             spline_x = make_interp_spline(ts, spline_points_i[:, 0], k=3)
             spline_y = make_interp_spline(ts, spline_points_i[:, 1], k=3)
             spline_z = make_interp_spline(ts, spline_points_i[:, 2], k=3)
-            
             splines_3d.append((spline_x, spline_y, spline_z, ts))  
         
         self.get_logger().info(f'Found {len(splines_3d)} 3D splines')
-        self.last_3d_spline = splines_3d[-1]                                   
+        if splines_3d:
+            self.last_3d_spline = splines_3d[-1]                                   
         
+        # Try to localize remaining cameras using the new 3D splines
         self.localize_remaining_cameras(splines_3d, CameraInfo=namedtuple('CameraInfo', ['K_matrix', 'distCoeff', 'resolution']))
         
+        # For each localized camera, plot reprojection analysis and run bundle adjustment
         for camera_id in self.localized_cameras:
-            # Send static transforms for all localized cameras
             tvec, R = self.camera_poses[camera_id]
-
-            # Plot reprojection analysis before bundle adjustment
+            # Gather all 2D detections for this camera
             pts_detected_camera = []
             for group in self.rectified_data_lists[camera_id]:
                 for detection in group:
@@ -470,9 +474,10 @@ class MainNode(Node):
             CameraInfo = namedtuple('CameraInfo', ['K_matrix', 'distCoeff', 'resolution'])
             camera_info = CameraInfo(
                 K_matrix=self.rectified_camera_matrices[camera_id],
-                distCoeff=np.zeros(5),  # Assuming no distortion for rectified points
+                distCoeff=np.zeros(5),  # No distortion for rectified points
                 resolution=self.camera_calibrations[camera_id]['resolution']
             )
+            # Plot before bundle adjustment
             self.plot_reprojection_analysis(
                 splines_3d, pts_detected_camera,
                 R, tvec, camera_info, camera_id,
@@ -480,12 +485,13 @@ class MainNode(Node):
                 before=True
             )
 
+            # Bundle adjustment in a thread to avoid blocking
             def run_bundle_adjustment(camera_id=camera_id, tvec=tvec, R=R):
                 res = self.bundle_adjust_camera_pose(
                     splines_3d,
                     self.rectified_data_lists[camera_id], 
                     self.rectified_camera_matrices[camera_id], 
-                    np.zeros(5),  # Assuming no distortion for rectified points
+                    np.zeros(5),  # No distortion for rectified points
                     initial_rvec=cv.Rodrigues(R)[0].flatten(),
                     initial_tvec=tvec
                 )
@@ -500,16 +506,18 @@ class MainNode(Node):
                 CameraInfo = namedtuple('CameraInfo', ['K_matrix', 'distCoeff', 'resolution'])
                 camera_info = CameraInfo(
                     K_matrix=self.rectified_camera_matrices[camera_id],
-                    distCoeff=np.zeros(5),  # Assuming no distortion for rectified points
+                    distCoeff=np.zeros(5),
                     resolution=self.camera_calibrations[camera_id]['resolution']
                 )      
+                # Plot after bundle adjustment
                 self.plot_reprojection_analysis(
                     splines_3d, pts_detected_camera, 
                     res['R'], res['tvec'], camera_info, camera_id,
                     title=f"Reprojection Analysis for Camera {camera_id} after Bundle Adjustment")
                 self.get_logger().info(f'Bundle adjustment completed for camera {camera_id} with {len(pts_detected_camera)} points')          
                     
-
+            # Start bundle adjustment in a separate thread
+            # NOTE: As explained in the report, the bundle adjustment is more harmful than helpful in this case, so it is commented out.
             # threading.Thread(target=run_bundle_adjustment, daemon=True).start()
                    
     def localize_remaining_cameras(self, splines_3d, CameraInfo):
@@ -519,28 +527,28 @@ class MainNode(Node):
         :param CameraInfo: Namedtuple with camera calibration info.
         """
         for camera_id in self.possible_values:
-            if camera_id in self.localized_cameras:
+            if camera_id in self.localized_cameras or camera_id in self.cameras_to_ignore:
                 continue
             corresp_3d2d_this_camera = []
+            # Gather 3D-2D correspondences for this camera
             for group in self.rectified_data_lists[camera_id]:
                 if not group:
                     continue
                 for point in group:
-                    # Find spline that contains this point in time
+                    # Find a spline that covers this timestamp
                     for spline_x, spline_y, spline_z, ts in splines_3d:
                         if ts[0] <= point[0] <= ts[-1]:
-                            # Point is within the time range of this spline
                             x_3d = float(spline_x(point[0]))
                             y_3d = float(spline_y(point[0]))
                             z_3d = float(spline_z(point[0]))
                             corresp_3d2d_this_camera.append(((x_3d, y_3d, z_3d, point[0]), (point[2], point[3]), point[0]))
-                            break  # No need to check other splines
+                            break  # Only use the first matching spline
 
+            # Proceed if enough correspondences are found
             if len(corresp_3d2d_this_camera) > self.min_correspondences * .5:
-                rvec, tvec, inliers = None, None, None
                 object_points = np.array([p[0][:3] for p in corresp_3d2d_this_camera], dtype=np.float32)
                 image_points = np.array([p[1] for p in corresp_3d2d_this_camera], dtype=np.float32)
-                # Ensure shapes are correct for solvePnPRansac
+                # Estimate camera pose using PnP RANSAC
                 _, rvec, tvec, inliers = cv.solvePnPRansac(
                     object_points,
                     image_points,
@@ -549,23 +557,17 @@ class MainNode(Node):
                     confidence=0.99, reprojectionError=8.0
                 )
 
+                # Accept pose if enough inliers are found
                 if inliers is not None and np.sum(inliers) / len(inliers) > self.min_accettable_f:
                     self.get_logger().info(f'Found valid pose for camera {camera_id} with {len(inliers)} correspondences over {len(corresp_3d2d_this_camera)} points')
-
-                    # Convert rvec to rotation matrix
                     R, _ = cv.Rodrigues(rvec)
-
-                    self.camera_poses[camera_id] = (tvec.flatten(), R)  # Store pose for this camera
-
-                    # Send static transform for this camera
+                    self.camera_poses[camera_id] = (tvec.flatten(), R)
                     self.sendTfStaticTransform(camera_id, tvec.flatten(), R)
-
                     camera_info = CameraInfo(
                         K_matrix=self.rectified_camera_matrices[camera_id],
-                        distCoeff=np.zeros(5),  # Assuming no distortion for rectified points
+                        distCoeff=np.zeros(5),
                         resolution=self.camera_calibrations[camera_id]['resolution']
-                    )                                                                                 
-
+                    )
                     self.localized_cameras.add(camera_id)
                 else:
                     self.get_logger().warn(f'Discarded pose for camera {camera_id} due to insufficient inliers: {np.sum(inliers) if inliers is not None else 0} / {len(corresp_3d2d_this_camera)}')
@@ -573,29 +575,30 @@ class MainNode(Node):
                 self.get_logger().info(f'Insufficient points for solvePnPRansac for camera {camera_id}: {len(corresp_3d2d_this_camera)} points')
     
     def plotall(self):
-        
+        # Plot all fitted splines for each camera
         for camera_id, splines in self.splines.items():
             plt.figure(figsize=(19, 10))
             plt.title(f'Splines for Camera {camera_id}')
             for spline_x, spline_y, time_points, data_indices in splines:
+                # Plot the spline curve in rectified coordinates
                 plt.plot(spline_x(time_points), -spline_y(time_points))
             plt.xlabel('Rectified X')
             plt.ylabel('Rectified Y')
             plt.xlim(0, self.camera_calibrations[camera_id]['resolution'][0])
             plt.ylim(-self.camera_calibrations[camera_id]['resolution'][1], 0)
             plt.savefig(f'spline_camera_{camera_id}.png')            
-            
+
+        # Plot all rectified detection points for each camera
         for camera_id, data_points in self.rectified_data_lists.items():
             plt.figure(figsize=(19, 10))
             plt.title(f'Rectified Points for Camera {camera_id}')
-            
             for group in data_points:
                 if not group:
                     continue
+                # Scatter plot for each group of temporally close points
                 x_coords = [p[2] for p in group]
                 y_coords = [-p[3] for p in group]
                 plt.scatter(x_coords, y_coords, s=1, label=f'Group {data_points.index(group)}')
-            
             plt.xlabel('Rectified X')
             plt.ylabel('Rectified Y')
             plt.xlim(0, self.camera_calibrations[camera_id]['resolution'][0])
@@ -606,31 +609,29 @@ class MainNode(Node):
         self, splines_3d, original_points_2d, 
         R, t, camera_info, camera_id, title=None, before=False
     ):
-        """Plot reprojected 2D points for a single camera."""
-        # Reproject points
-        
+        """
+        Plot the reprojected 2D points of 3D splines and compare them to the original 2D detections for a single camera.
+        """
+        # Collect 3D points from all splines at their timestamps
         points_3d = []
-        
         for spline in splines_3d:
             spline_x, spline_y, spline_z, tss = spline
-            timestamps_linspace = tss
-            for tt in timestamps_linspace:
+            for tt in tss:
                 points_3d.append([spline_x(tt), spline_y(tt), spline_z(tt)])
-        points_3d = np.array(points_3d)
-        points_3d = points_3d.reshape(-1, 3)
+        points_3d = np.array(points_3d).reshape(-1, 3)
         
+        # Project 3D points into the image using the given camera pose and intrinsics
         reprojected_points, _ = cv.projectPoints(
             points_3d, R, t,
             camera_info.K_matrix, camera_info.distCoeff
         )
         reprojected_points = reprojected_points.reshape(-1, 2)
 
+        # Prepare the plot
         plt.figure(figsize=(19, 10))
-        plt.title(f"Reprojection Analysis for Camera {camera_id}")
-        if title:
-            plt.title(title)
+        plt.title(f"Reprojection Analysis for Camera {camera_id}" if not title else title)
 
-        # Plot reprojected points
+        # Plot reprojected points (red) and original detected points (blue)
         original_points_2d = np.array(original_points_2d)
         plt.scatter(reprojected_points[:, 0], -reprojected_points[:, 1], c='r', label='Reprojected Points', s=1)
         plt.scatter(
@@ -642,9 +643,9 @@ class MainNode(Node):
         plt.legend()
         plt.xlim(0, camera_info.resolution[0])
         plt.ylim(-camera_info.resolution[1], 0)
-
         plt.tight_layout()
         
+        # Save the plot, indicating before/after bundle adjustment if needed
         before_after = "b" if before else "a"
         plt.savefig(f"reprojection_analysis_camera_{camera_id}_{before_after}.png")
         

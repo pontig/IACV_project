@@ -10,6 +10,7 @@ import warnings
 import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
 import pandas as pd
+import argparse
 
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for saving plots
@@ -38,7 +39,7 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 # Add both handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
-DATASET_NO = 2
+DATASET_NO = 1
 
 def search_optimal_beta(frames, splines, camera_info, main_camera, secondary_camera, dataset_no, beta_shift):
     """
@@ -149,7 +150,7 @@ def search_optimal_beta(frames, splines, camera_info, main_camera, secondary_cam
         beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
         beta_values_finer, inliers_finer, best_beta_finer, max_inliers_finer,
         beta_values_finest, inliers_finest, best_beta_finest, max_inliers_finest,
-        main_camera, secondary_camera, dataset_no
+        main_camera, secondary_camera, dataset_no, f"plots/search_results/dataset{dataset_no}"
     )
     
     plot_combined_results(
@@ -157,7 +158,7 @@ def search_optimal_beta(frames, splines, camera_info, main_camera, secondary_cam
         beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
         beta_values_finer, inliers_finer, best_beta_finer, max_inliers_finer,
         beta_values_finest, inliers_finest, best_beta_finest, max_inliers_finest,
-        main_camera, secondary_camera, dataset_no
+        main_camera, secondary_camera, dataset_no, f"plots/search_results/dataset{dataset_no}"
     )
     
     return best_beta_finest, max_inliers_finest, max_inliers_finest_abs_n
@@ -239,8 +240,8 @@ def first_beta_search(dataset_no=DATASET_NO, beta_shift=1):
                 import traceback
                 logging.error(traceback.format_exc())
     
-    # Save all results to a separate log file
-    result_log_path = f"logs/beta_results_dataset{dataset_no}.csv"
+    # Save all results to a separate log file (overwrite if exists)
+    result_log_path = f"beta_results_dataset{dataset_no}.csv"
     with open(result_log_path, 'w') as f:
         f.write("main_camera,secondary_camera,beta,inlier_ratio,num_inliers\n")
         for key, value in results.items():
@@ -251,6 +252,12 @@ def first_beta_search(dataset_no=DATASET_NO, beta_shift=1):
     
     return results
 
+
+# Parse positional argument for dataset_no
+parser = argparse.ArgumentParser(description="Beta searcher for done tracking datasets")
+parser.add_argument("dataset_no", type=int, help="Dataset number to process")
+args = parser.parse_args()
+DATASET_NO = args.dataset_no
 
 # Load camera info
 logging.info("Loading camera info")

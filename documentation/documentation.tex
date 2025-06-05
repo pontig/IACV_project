@@ -440,7 +440,17 @@ This script will save in the \texttt{plots/} folder a \texttt{.mp4} video with t
 
 \subsection{Offline Trajectory Reconstruction}
 
-The offline trajectory reconstruction can be run in a similar way, by executing the following command:
+The offline trajectory reconstruction is divided in two scripts, one for the $\beta$ search and one for the trajectory reconstruction. We decided to split the two scripts since the first one is quite time consuming, and it can be run only once for each dataset. 
+
+To run the $\beta$ search, you can execute the following command:
+
+\begin{verbatim}
+python beta_search.py dataset_no
+\end{verbatim}
+
+Where \texttt{dataset\_no} is the number of the dataset you want to use. This script will save in the \texttt{plots/search\_results/} folder all the plots showing the results of the $\beta$ search, and in the main directory a \texttt{.csv} file with the results of the search, named \texttt{beta\_results\_dataset\_X.csv}, where \texttt{X} is the dataset number.
+
+To run the trajectory reconstruction, you can execute the following command:
 
 \begin{verbatim}
 python main.py [-h] dataset_no
@@ -453,7 +463,7 @@ positional arguments:
 
 This script will execute all the steps described in above, saving all the results in the \texttt{plots/} folder. To see the results, in a more interactive way, you can uncomment the very last line of the script, which will display all the intermediate results (Note: this will open a lot of windows, so it is recommended to comment it back after you are done).
 
-In the first step, the script will check the existence of a \texttt{.csv} file with the results of the $\beta$ search, and if it does not exist, it will run the temporal shift estimation algorithm, that is quite time consuming, even if it is heavily parallelized. For this reason, we suggest not to delete the \texttt{.csv} files named \texttt{beta\_results\_dataset\_X.csv}.
+Even if it is heavily parallelized, the $\beta$ search is still very time consuming. For this reason, we suggest not to delete the \texttt{.csv} files named \texttt{beta\_results\_dataset\_X.csv}, since the trajectory reconstruction script will automatically load the results from these files, and it will fail if they are not present. 
 
 \subsection{Online Trajectory Reconstruction}
 

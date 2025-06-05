@@ -51,31 +51,47 @@ def get_rainbow_color(global_timestamp):
 
 def evaluate_beta(b, frames, splines, camera_info, main_camera, secondary_camera, inliers_list=None, return_f=False):
     """
-    Calculate inlier ratio for a given beta value between two cameras
-    
-    Parameters:
-    -----------
+    Calculate the inlier ratio for a given beta value between two cameras by matching detections
+    from the secondary camera to splines from the main camera, estimating the fundamental matrix,
+    and evaluating the inlier ratio.
+
+    Parameters
+    ----------
     b : float
-        Beta value to test
+        Beta value (time offset) to test for synchronization.
     frames : list
-        List of frames from secondary camera with detection points
+        List of frames from the secondary camera, each as a tuple (frame_index, x, y).
     splines : dict
-        Dictionary of splines for all cameras
+        Dictionary mapping camera IDs to lists of splines. Each spline is a tuple (spline_x, spline_y, tss),
+        where spline_x and spline_y are callable functions of time, and tss is an array of timestamps.
     camera_info : dict
-        Dictionary of camera information
+        Dictionary mapping camera IDs to objects with at least an 'fps' attribute.
     main_camera : int
-        ID of main camera
+        ID of the main camera (reference).
     secondary_camera : int
-        ID of secondary camera
+        ID of the secondary camera (to be synchronized).
     inliers_list : list, optional
-        List to append inlier ratio to
-    return_f : boolean, optional
-        Whether to return also the fundamental matrix for a specific beta passed
-        
-    Returns:
-    --------
-    float
-        Inlier ratio for the given beta
+        If provided, appends the computed inlier ratio for this beta.
+    return_f : bool, optional
+        If True, also returns the estimated fundamental matrix, mask, and correspondences.
+
+    Returns
+    -------
+    float or tuple
+        If return_f is False:
+            Tuple (inlier_ratio, num_correspondences)
+        If return_f is True:
+            Tuple (F, mask, correspondences)
+            - F: Estimated fundamental matrix.
+            - mask: Inlier mask from RANSAC.
+            - correspondences: List of matched points and their global timestamps.
+
+    Notes
+    -----
+    - The function computes global timestamps for each frame using the provided beta and the frame rate ratio.
+    - Only frames with overlapping timestamps in the main camera's splines are considered.
+    - Uses RANSAC to estimate the fundamental matrix and compute the inlier ratio.
+    - If no correspondences are found, returns 0 (and appends 0 to inliers_list if provided).
     """
     correspondences = [] # List of (spline_x1, spline_y1), (x2, y2), global_ts
     for frame in frames:

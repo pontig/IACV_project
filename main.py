@@ -10,6 +10,7 @@ from datetime import datetime
 import time
 import sys
 from scipy.interpolate import make_interp_spline
+import argparse
 
 # import matplotlib
 # matplotlib.use('Agg')
@@ -18,7 +19,7 @@ from data_loader import load_dataframe
 from global_fn import *
 from plotter import *
 from bundle_adjustment import bundle_adjust_camera_pose
-import argparse
+from beta_searcher import do_beta_search
 
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
@@ -398,10 +399,8 @@ def merge_and_smooth_splines(spline_dicts, tpns_to_add_to_3d_with_timestamps, bl
     
     # Third pass: Create new splines for remaining points
     remaining_points = []
-    for pt in tpns_sorted:
-        if pt[3] not in extended_timestamps:
-            remaining_points.append(pt)
-    
+    remaining_points = [pt for pt in tpns_sorted if pt[3] not in extended_timestamps]
+
     # Group remaining points by proximity in time
     if remaining_points:
         remaining_points.sort(key=lambda pt: pt[3])
@@ -439,38 +438,43 @@ def merge_and_smooth_splines(spline_dicts, tpns_to_add_to_3d_with_timestamps, bl
 if __name__ == "__main__":
     
     
-    # ============== Step 0: Load data and search for betas ==============
+    # =================================================================== Step 0: Load data and search for betas ===================================================================
     
     camera_poses = []
     
-    # Load camera info
+    # Load camera info (camera IDs from cameras.txt)
     logging.info("Loading camera info")
     with open(f"drone-tracking-datasets/dataset{DATASET_NO}/cameras.txt", 'r') as f:
         cameras = f.read().strip().split()    
-    cameras = cameras[2::3]
+    cameras = cameras[2::3]  # Extract camera IDs (every third entry, skipping header)
     logging.info(f"Loaded {len(cameras)} cameras")
     np.savez_compressed("cameras.npz", cameras=cameras)
     camera_poses = [{"cam_id": i, "R": None, "t": None, 'b': None} for i in range(len(cameras))]
     
-    # Load dataframe and splines
+    # Load detection dataframe and 2D splines
     logging.info("Loading dataframe and splines")
     df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
     
+    # Check for beta results file
     if not os.path.exists(f"beta_results_dataset{DATASET_NO}.csv"):
-        logging.error("Beta results file not found. Please run the beta searcher first.")
-        sys.exit(1)
+        do_beta_search(DATASET_NO, df, splines, camera_info, cameras, plot_output_dir)
+        # logging.error("Beta results file not found. Please run the beta searcher first.")
+        # sys.exit(1)
     
     logging.info("Loading beta results")  
     betas_df = pd.read_csv(f"beta_results_dataset{DATASET_NO}.csv")
     betas_df = betas_df.sort_values(by='inlier_ratio', ascending=False)
-    # Create a 2D array with all betas from betas_df
-    beta_array = betas_df.pivot(index='secondary_camera', columns='main_camera', values='beta').fillna(0).to_numpy() # [sec][prim]
+    # Create a 2D array with all betas from betas_df: [secondary_camera][main_camera]
+    beta_array = betas_df.pivot(index='secondary_camera', columns='main_camera', values='beta').fillna(0).to_numpy()
     
-    # ============== Step 1: Generate first 3D point and splines with best beta ==============
+    # =================================================================== Step 1: Generate first 3D point and splines with best beta ===================================================================
     
+    # Select the best beta and corresponding camera pair
     best_beta = betas_df.iloc[0]['beta']
     main_camera = betas_df.iloc[0]['main_camera']
     secondary_camera = betas_df.iloc[0]['secondary_camera']
+
+    # Get valid detections for the secondary camera
     frames = df[df['cam_id'] == int(secondary_camera)][['frame_id', 'detection_x', 'detection_y']].values
     frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
     
@@ -479,14 +483,18 @@ if __name__ == "__main__":
     
     logging.info(f"Best beta: {best_beta}, main camera: {main_camera}, secondary camera: {secondary_camera}, inlier_ratio: {betas_df.iloc[0]['inlier_ratio']:.4f}")
     
+    # Evaluate the best beta and get correspondences
     F, mask, correspondences = evaluate_beta(best_beta, frames, splines, camera_info, int(main_camera), int(secondary_camera), return_f=True)
     E = camera_info[int(main_camera)].K_matrix.T @ F @ camera_info[int(secondary_camera)].K_matrix
     
+    # Normalize 2D points for both cameras
     main_pts_normalized = to_normalized_camera_coord(np.array([x for x, _, _ in correspondences]), camera_info[int(main_camera)].K_matrix, camera_info[int(main_camera)].distCoeff)
     secondary_pts_normalized = to_normalized_camera_coord(np.array([y for _, y, _ in correspondences]), camera_info[int(secondary_camera)].K_matrix, camera_info[int(secondary_camera)].distCoeff)
     
+    # Recover relative pose and triangulate points
     _, R, t, mask, triangulated_points_first_step = cv.recoverPose(E, main_pts_normalized, secondary_pts_normalized, cameraMatrix=np.eye(3), distanceThresh=100)
     
+    # Store initial camera poses
     camera_poses[int(main_camera)] = {
         "cam_id": int(main_camera),
         "R": np.eye(3),
@@ -498,44 +506,18 @@ if __name__ == "__main__":
         "t": t,
     }
     
+    # Convert triangulated points from homogeneous to 3D coordinates
     triangulated_points_first_step /= triangulated_points_first_step[3]
     triangulated_points_first_step = triangulated_points_first_step[:3]
     triangulated_points_first_step = triangulated_points_first_step.T
     
+    # Attach timestamps to triangulated 3D points
     triangulated_points_first_step_with_timestamps = np.column_stack((triangulated_points_first_step, np.array([x[2] for x in correspondences])))
-    
-    # # Reproject 3D points onto both cameras
-    # logging.info("Reprojecting 3D points onto both cameras")
-
-    # # Main camera reprojection
-    # main_reprojected_points, _ = cv.projectPoints(
-    #     triangulated_points_first_step, np.zeros((3, 1)), np.zeros((3, 1)), 
-    #     camera_info[int(main_camera)].K_matrix, camera_info[int(main_camera)].distCoeff
-    # )
-    # main_reprojected_points = main_reprojected_points.reshape(-1, 2)
-
-    # # Secondary camera reprojection
-    # secondary_reprojected_points, _ = cv.projectPoints(
-    #     triangulated_points_first_step, R, t, 
-    #     camera_info[int(secondary_camera)].K_matrix, camera_info[int(secondary_camera)].distCoeff
-    # )
-    # secondary_reprojected_points = secondary_reprojected_points.reshape(-1, 2)
     
     # Compute first 3D splines
     splines_3d = generate_3d_splines(triangulated_points_first_step_with_timestamps, [])
         
-    # plot_triangulated_points(triangulated_points, main_camera, secondary_camera, output_dir=plot_output_dir)
-
-    # plot_reprojection_analysis(
-    #     triangulated_points_first_step, np.array([y for _, y, _ in correspondences]),
-    #     R, t,
-    #     camera_info[int(secondary_camera)], int(secondary_camera),
-    #     output_dir=plot_output_dir)
-    # )
-    # plot_3d_splines(triangulated_points_first_step, correspondences, main_camera, secondary_camera, output_dir=plot_output_dir)
-
-
-    # ============== Step 2.1: Add cameras in decreasing order of inlier ratio ==============
+    # =================================================================== Step 2.1: Add cameras in decreasing order of inlier ratio ===================================================================
     cameras_processed = [int(main_camera), int(secondary_camera)]
     cameras_skipped = []
     main_camera_index = 0
@@ -553,8 +535,6 @@ if __name__ == "__main__":
             ]
             betas_here_df = betas_here_df.sort_values(by='inlier_ratio', ascending=False)
             
-            # print(betas_here_df)
-            
             if betas_here_df.empty:
                 logging.warning("No valid camera pairs found with the current conditions.")
                 break
@@ -567,6 +547,7 @@ if __name__ == "__main__":
             num_inliers = betas_here_df.iloc[next_in_line]['num_inliers'] if 'num_inliers' in betas_here_df.columns else np.inf
             next_in_line += 1
             
+            # Skip pairs with low inlier ratio or insufficient support
             if inlier_ratio < 0.5 or num_inliers < 200:
                 logging.warning(f"Low inlier ratio or insufficient support for camera pair {main_camera}-{new_camera}: {inlier_ratio:.4f}, num_inliers: {num_inliers}")
                 if next_in_line >= len(betas_here_df):
@@ -577,23 +558,21 @@ if __name__ == "__main__":
                 continue
             
             if new_camera not in cameras_processed:
+                # If switching main camera, adjust spline timestamps to be consistent
                 if main_camera != old_main_camera:
                     logging.info(f"Switching main camera from {old_main_camera} to {main_camera}, adjusting 3d splines timestamps...")
                     beta_main_old_main_camera = betas_df[(betas_df['main_camera'] == main_camera) & (betas_df['secondary_camera'] == old_main_camera)]['beta'].values[0]
                     new_splines_3d = []
                     for spline_x, spline_y, spline_z, tss in splines_3d:
-                        # Adjust timestamps for the new main camera
                         old_tss = tss.copy()
-                        new_tss = compute_global_time(old_tss, camera_info[int(main_camera)].fps/camera_info[int(old_main_camera)].fps, beta_main_old_main_camera) # TODO: maybe here
+                        new_tss = compute_global_time(old_tss, camera_info[int(main_camera)].fps/camera_info[int(old_main_camera)].fps, beta_main_old_main_camera)
                         tss[:] = new_tss
                         spline_x = make_interp_spline(tss, spline_x(old_tss), k=3)
                         spline_y = make_interp_spline(tss, spline_y(old_tss), k=3)
                         spline_z = make_interp_spline(tss, spline_z(old_tss), k=3)
                         new_splines_3d.append((spline_x, spline_y, spline_z, tss))
-                        
                     splines_3d = new_splines_3d  
                     old_main_camera = main_camera
-                                        
                 break
             
         if stop:
@@ -609,8 +588,8 @@ if __name__ == "__main__":
         global_ts = compute_global_time(frames_ids, camera_info[int(main_camera)].fps/camera_info[int(new_camera)].fps, nth_best_beta)
         frames = np.column_stack((global_ts, frames[:, 1], frames[:, 2]))
         
-        # Compute 3D - 2D correspondences
-        correspondences_2 = [] # List of (spline_x1, spline_y1, spline_z1), (x2, y2), global_ts
+        # Compute 3D-2D correspondences for PnP
+        correspondences_for_pnp = []
         for frame in frames:
             global_ts = frame[0]
             for spline_x, spline_y, spline_z, tss in splines_3d:
@@ -618,25 +597,25 @@ if __name__ == "__main__":
                     x1 = float(spline_x(global_ts))
                     y1 = float(spline_y(global_ts))
                     z1 = float(spline_z(global_ts))
-                    correspondences_2.append((
+                    correspondences_for_pnp.append((
                         (x1, y1, z1),
                         (frame[1], frame[2]),
                         global_ts
                     ))
                     break
-        if not correspondences_2:
+        if not correspondences_for_pnp:
             warnings.warn(f"No overlapping frames found between cameras {main_camera} and {new_camera} for beta: {nth_best_beta}")
             
-        # Perform pnp to locate camera pose
+        # Estimate camera pose using PnP
         retval, rvec, tvec, inliers = cv.solvePnPRansac(
-            np.array([x for x, _, _ in correspondences_2], dtype=np.float32),
-            np.array([y for _, y, _ in correspondences_2], dtype=np.float32),
+            np.array([x for x, _, _ in correspondences_for_pnp], dtype=np.float32),
+            np.array([y for _, y, _ in correspondences_for_pnp], dtype=np.float32),
             camera_info[int(new_camera)].K_matrix,
             camera_info[int(new_camera)].distCoeff,
             confidence=.999, reprojectionError=12.0,
         )
         
-        logging.info(f"Camera pose for camera {new_camera} computed with {len(correspondences_2)} correspondences, and {len(inliers)} inliers, inliers ratio: {len(inliers)/len(correspondences_2):.4f}")
+        logging.info(f"Camera pose for camera {new_camera} computed with {len(correspondences_for_pnp)} correspondences, and {len(inliers)} inliers, inliers ratio: {len(inliers)/len(correspondences_for_pnp):.4f}")
         
         camera_poses[int(new_camera)] = {
             "cam_id": int(new_camera),
@@ -644,14 +623,16 @@ if __name__ == "__main__":
             "t": tvec,
         }            
         
-        # ============== Step 2.2: Extend 3D splines with new camera detections ==============
+        # =================================================================== Step 2.2: Extend 3D splines with new camera detections ===================================================================
         
-        frames = np.column_stack((frames_ids, frames[:, 1], frames[:, 2])) # to restore original frame ids
+        frames = np.column_stack((frames_ids, frames[:, 1], frames[:, 2])) # restore original frame ids for correspondence search
         F, mask, correspondences = evaluate_beta(nth_best_beta, frames, splines, camera_info, int(main_camera), int(new_camera), return_f=True)
         
+        # Projection matrices for triangulation
         P1 = camera_info[int(main_camera)].K_matrix @ np.hstack((np.eye(3), np.zeros((3, 1))))
         P3 = camera_info[int(new_camera)].K_matrix @ np.hstack((cv.Rodrigues(rvec)[0], tvec.reshape(-1, 1)))
         
+        # Triangulate new 3D points between main and new camera
         triangulated_points_nth_step = cv.triangulatePoints(P1, P3,
             np.array([x for x, _, _ in correspondences], dtype=np.float32).T,
             np.array([y for _, y, _ in correspondences], dtype=np.float32).T
@@ -661,53 +642,27 @@ if __name__ == "__main__":
         triangulated_points_nth_step = triangulated_points_nth_step[:3]
         triangulated_points_nth_step = triangulated_points_nth_step.T
         
+        # Attach timestamps to triangulated points
         tpns_with_timestamps = np.column_stack((triangulated_points_nth_step, np.array([x[2] for x in correspondences])))
         
-        # Filter out points with timestamps outside the range of the splines
+        # Filter out points with timestamps already covered by existing splines
         mask = []
         for point in tpns_with_timestamps:
             point_ts = point[3]
             in_range = any(np.min(tss) <= point_ts <= np.max(tss) for _, _, _, tss in splines_3d)
             mask.append(in_range)
 
-        # Keep only points within the range
+        # Keep only points outside the range of current splines
         tpns_to_add_to_3d = triangulated_points_nth_step[np.logical_not(mask)]
         tpns_to_add_to_3d_with_timestamps = tpns_with_timestamps[np.logical_not(mask)]        
         # plot_triangulated_points(triangulated_points_nth_step, main_camera, third_camera, output_dir=plot_output_dir)
         
-        # Plot splines in red and triangulated_points in blue
-        fig = plt.figure(figsize=(10, 10))
-        ax = fig.add_subplot(111, projection='3d')
-
-        # Plot triangulated_points in blue
-        ax.scatter(
-            tpns_to_add_to_3d[:, 0], 
-            tpns_to_add_to_3d[:, 1], 
-            tpns_to_add_to_3d[:, 2], 
-            c='blue', s=1, label=f"Triangulated Points for pair main-new {main_camera}-{new_camera}"
-        )
-
-        # Plot splines in red
-        for spline_x, spline_y, spline_z, ts in splines_3d:
-            ax.plot(
-                spline_x(ts), 
-                spline_y(ts), 
-                spline_z(ts), 
-                c='red'
-            )
-
-        # Set plot labels and title
-        ax.set_title("3D Points and Splines Visualization")
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
-        ax.legend()
-        
-        plt.savefig(f"{plot_output_dir}/3d_points_and_splines_{main_camera}_{new_camera}.png")
-        
+        plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera, output_dir=plot_output_dir)
+            
+        # Add new points as splines or extend existing ones
         splines_3d = generate_3d_splines(tpns_to_add_to_3d_with_timestamps, splines_3d)
         
-        # Convert splines to mutable structure
+        # Convert splines to mutable dicts for merging/smoothing
         spline_dicts = [{
             'spline_x': spline_x,
             'spline_y': spline_y,
@@ -715,11 +670,13 @@ if __name__ == "__main__":
             'ts': ts.copy()
         } for spline_x, spline_y, spline_z, ts in splines_3d]
 
+        # Merge and smooth splines with new points
         spline_dicts = merge_and_smooth_splines(spline_dicts, tpns_to_add_to_3d_with_timestamps)
-                
-        # Convert back to original format
+            
+        # Convert back to tuple format
         splines_3d = [(s['spline_x'], s['spline_y'], s['spline_z'], s['ts']) for s in spline_dicts]
         
+        # Plot reprojection before bundle adjustment
         plot_reprojection_analysis(
             splines_3d, frames[:, 1:],
             cv.Rodrigues(camera_poses[int(new_camera)]["R"])[0], camera_poses[int(new_camera)]["t"],
@@ -728,6 +685,7 @@ if __name__ == "__main__":
             output_dir=plot_output_dir, initial=True
         )
         
+        # Refine camera pose with bundle adjustment using new splines
         for camera_pose in camera_poses:
             if camera_pose["R"] is None or camera_pose["cam_id"] != int(new_camera):
                 continue
@@ -772,56 +730,7 @@ if __name__ == "__main__":
         ax.set_zlabel("Z")
         # ax.legend()
         
-            
-        # print(f"Rotation vector: {rvec}")
-        # print(f"Translation vector: {tvec}")
-        # print(f"Inlier ratio: {len(inliers) / len(correspondences_2)}")
-        # print(f"Number of inliers: {len(inliers)}")
-        
-        # plot_reprojection_analysis(
-        #     splines_3d, df[df['cam_id'] == int(third_camera)][['detection_x', 'detection_y']].values,
-        #     cv.Rodrigues(camera_poses[int(third_camera)]["R"])[0], camera_poses[int(third_camera)]["t"],
-        #     camera_info[int(third_camera)], int(third_camera),
-        #     title=f"Refined Reprojection Analysis for Camera {third_camera} with Beta {second_best_beta}"
-        # )
-        
-        # plot_reprojection_analysis(
-        #     splines_3d, df[df['cam_id'] == int(main_camera)][['detection_x', 'detection_y']].values,
-        #     cv.Rodrigues(camera_poses[int(main_camera)]["R"])[0], camera_poses[int(main_camera)]["t"],
-        #     camera_info[int(main_camera)], int(main_camera)
-        # )
-        
-        # # Plot camera poses with arrows along the z-direction and highlight the xy-plane
-        # fig = plt.figure(figsize=(15, 10))
-        # ax = fig.add_subplot(111, projection='3d')
-
-        # # Plot camera poses
-        # for pose in camera_poses:
-        #     if pose["R"] is None:
-        #         continue
-        #     cam_id = pose["cam_id"]
-        #     R = pose["R"]
-        #     t = pose["t"].flatten()
-            
-        #     # Plot camera position
-        #     ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=100)
-
-        #     # Plot arrow along the z-direction
-        #     z_dir = R @ np.array([0, 0, 1])  # Transform z-direction
-        #     ax.quiver(
-        #         t[0], t[1], t[2], 
-        #         z_dir[0], z_dir[1], z_dir[2], 
-        #         length=1.0, color='blue', linewidth=2
-        #     )
-
-        # # Set plot labels and title
-        # ax.set_title("Camera Poses with Z-Direction Arrows")
-        # ax.set_xlabel("X")
-        # ax.set_ylabel("Y")
-        # ax.set_zlabel("Z")
-        # ax.legend()
-        
-        cameras_processed.append(int(new_camera))
+        cameras_processed.append(int(new_camera)) # Add new camera to processed list
         
     # main_camera = first_main_camera
     # beta = first_beta
@@ -845,7 +754,7 @@ if __name__ == "__main__":
     plane_size = 10
     xx, yy = np.meshgrid(np.linspace(-plane_size, plane_size, 10), np.linspace(-plane_size, plane_size, 10))
     zz = np.zeros_like(xx)
-    ax.plot_surface(xx, yy, zz, alpha=0.2, color='gray')
+    # ax.plot_surface(xx, yy, zz, alpha=0.2, color='gray')
         
     for spline in splines_3d:
         spline_x, spline_y, spline_z, ts = spline
