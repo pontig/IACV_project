@@ -86,8 +86,8 @@ def load_dataframe(cameras, dataset_no):
         'global_ts': [],
         'detection_x': [],
         'detection_y': [],
-        'velocity_x': [],
-        'velocity_y': []
+        # 'velocity_x': [],
+        # 'velocity_y': []
     }
     for i, camera in enumerate(cameras):
         plt.figure(figsize=(19, 10))
@@ -120,6 +120,8 @@ def load_dataframe(cameras, dataset_no):
         contiguous_i = find_contiguous_regions(detections_i)
         splines_i = []
         for start_frame, end_frame in contiguous_i:
+            if int(start_frame) == int(end_frame):
+                continue
             # timestamps_j = compute_global_time(frame_indices_i[int(start_frame-1):int(end_frame-1)], alphas[i], betas[i])
             timestamps_j = compute_global_time(frame_indices_i[int(start_frame-1):int(end_frame-1)], 1)
             if len(timestamps_j) > 3:
@@ -158,9 +160,9 @@ def load_dataframe(cameras, dataset_no):
             data['detection_y'].append(y)
             data['global_ts'].append(global_ts)
             
-            # Set default velocity to None
-            data['velocity_x'].append(None)
-            data['velocity_y'].append(None)
+            # # Set default velocity to None
+            # data['velocity_x'].append(None)
+            # data['velocity_y'].append(None)
         
         plt.figure(figsize=(19, 10))    
         # Scatter plot of detections_i
@@ -176,20 +178,20 @@ def load_dataframe(cameras, dataset_no):
         plt.clf()
         plt.close()
 
-        # After processing all detections, compute forward velocity
-        for j in range(len(data['frame_id']) - 1):
-            # Check if we're looking at consecutive frames from the same camera
-            if (data['cam_id'][j] == data['cam_id'][j+1] and 
-                data['detection_x'][j] != 0.0 and data['detection_y'][j] != 0.0 and
-                data['detection_x'][j+1] != 0.0 and data['detection_y'][j+1] != 0.0 and
-                data['global_ts'][j+1] - data['global_ts'][j] > 0):
-                
-                # Calculate velocity (forward difference)
-                velocity_x = (data['detection_x'][j+1] - data['detection_x'][j]) / (data['global_ts'][j+1] - data['global_ts'][j])
-                velocity_y = (data['detection_y'][j+1] - data['detection_y'][j]) / (data['global_ts'][j+1] - data['global_ts'][j])
-                
-                data['velocity_x'][j] = velocity_x
-                data['velocity_y'][j] = velocity_y
+        # # After processing all detections, compute forward velocity
+        # for j in range(len(data['frame_id']) - 1):
+        #     # Check if we're looking at consecutive frames from the same camera
+        #     if (data['cam_id'][j] == data['cam_id'][j+1] and 
+        #         data['detection_x'][j] != 0.0 and data['detection_y'][j] != 0.0 and
+        #         data['detection_x'][j+1] != 0.0 and data['detection_y'][j+1] != 0.0 and
+        #         data['global_ts'][j+1] - data['global_ts'][j] > 0):
+
+        #         # Calculate velocity (forward difference)
+        #         velocity_x = (data['detection_x'][j+1] - data['detection_x'][j]) / (data['global_ts'][j+1] - data['global_ts'][j])
+        #         velocity_y = (data['detection_y'][j+1] - data['detection_y'][j]) / (data['global_ts'][j+1] - data['global_ts'][j])
+
+        #         data['velocity_x'][j] = velocity_x
+        #         data['velocity_y'][j] = velocity_y
 
     df = pd.DataFrame(data)
     # Filter the dataframe to include only primary and secondary cameras

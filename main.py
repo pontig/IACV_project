@@ -19,7 +19,6 @@ from data_loader import load_dataframe
 from global_fn import *
 from plotter import *
 from bundle_adjustment import bundle_adjust_camera_pose
-from beta_searcher import do_beta_search
 
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
@@ -448,7 +447,6 @@ if __name__ == "__main__":
         cameras = f.read().strip().split()    
     cameras = cameras[2::3]  # Extract camera IDs (every third entry, skipping header)
     logging.info(f"Loaded {len(cameras)} cameras")
-    np.savez_compressed("cameras.npz", cameras=cameras)
     camera_poses = [{"cam_id": i, "R": None, "t": None, 'b': None} for i in range(len(cameras))]
     
     # Load detection dataframe and 2D splines
@@ -457,9 +455,8 @@ if __name__ == "__main__":
     
     # Check for beta results file
     if not os.path.exists(f"beta_results_dataset{DATASET_NO}.csv"):
-        do_beta_search(DATASET_NO, df, splines, camera_info, cameras, plot_output_dir)
-        # logging.error("Beta results file not found. Please run the beta searcher first.")
-        # sys.exit(1)
+        logging.error("Beta results file not found. Please run the beta searcher first.")
+        sys.exit(1)
     
     logging.info("Loading beta results")  
     betas_df = pd.read_csv(f"beta_results_dataset{DATASET_NO}.csv")
@@ -516,6 +513,7 @@ if __name__ == "__main__":
     
     # Compute first 3D splines
     splines_3d = generate_3d_splines(triangulated_points_first_step_with_timestamps, [])
+    plot_3d_splines_from_functions(splines_3d, main_camera, secondary_camera, output_dir=plot_output_dir, title=f"3D Splines after first triangulation")
         
     # =================================================================== Step 2.1: Add cameras in decreasing order of inlier ratio ===================================================================
     cameras_processed = [int(main_camera), int(secondary_camera)]
@@ -657,7 +655,7 @@ if __name__ == "__main__":
         tpns_to_add_to_3d_with_timestamps = tpns_with_timestamps[np.logical_not(mask)]        
         # plot_triangulated_points(triangulated_points_nth_step, main_camera, third_camera, output_dir=plot_output_dir)
         
-        plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera, output_dir=plot_output_dir)
+        plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera, plot_output_dir=plot_output_dir)
             
         # Add new points as splines or extend existing ones
         splines_3d = generate_3d_splines(tpns_to_add_to_3d_with_timestamps, splines_3d)
@@ -710,31 +708,10 @@ if __name__ == "__main__":
             camera_poses[i]["R"] = ret['R']
             camera_poses[i]["t"] = ret['tvec']
             
-            
-        # plot splines
-        fig = plt.figure(figsize=(15, 10))
-        ax = fig.add_subplot(111, projection='3d')
-        for spline in splines_3d:
-            spline_x, spline_y, spline_z, ts = spline
-            ax.plot(spline_x(ts), spline_y(ts), spline_z(ts))
-        for camera_pose in camera_poses:
-            if camera_pose["R"] is None:
-                continue
-            cam_id = camera_pose["cam_id"]
-            R = camera_pose["R"]
-            t = camera_pose["t"].flatten()
-            # ax.scatter(t[0], t[1], t[2], label=f"Camera {cam_id}", s=30)
-        ax.set_title(f"3D Splines")
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
-        # ax.legend()
+        plot_3d_splines_from_functions(splines_3d, main_camera, new_camera, output_dir=plot_output_dir, title=f"3D Splines after adding {len(cameras_processed)+1}th camera")
         
         cameras_processed.append(int(new_camera)) # Add new camera to processed list
         
-    # main_camera = first_main_camera
-    # beta = first_beta
-
     for camera_pose in camera_poses:
         if camera_pose["R"] is None:
             continue
@@ -773,4 +750,4 @@ if __name__ == "__main__":
     # ax.legend()
     fig.savefig(f"{plot_output_dir}/3d_splines_final.png")
     
-    plt.show()
+    # plt.show()

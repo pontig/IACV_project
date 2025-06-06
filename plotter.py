@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cv2 as cv
 
+## PLOT FUNCTIONS FOR THE BETA SEARCH
+
 def plot_refinement_process(beta_values_coarse, inliers_coarse, best_beta_coarse, max_inliers_coarse,
                             beta_values_fine, inliers_fine, best_beta_fine, max_inliers_fine,
                             beta_values_finer, inliers_finer, best_beta_finer, max_inliers_finer,
@@ -131,6 +133,8 @@ def plot_combined_results(beta_values_coarse, inliers_coarse, best_beta_coarse, 
     plt.savefig(f"{output_dir}/inliers_vs_beta_combined_cam{main_camera}-{secondary_camera}_ds{dataset_no}.png")
     plt.close()
 
+## PLOT FUNCTIONS FOR THE ACTUAL DRONE TRAJECTORY RECONSTRUCTION
+
 def plot_triangulated_points(triangulated_points, main_camera, secondary_camera, output_dir="plots"):
     """Plot triangulated 3D points and save the figure."""
     fig = plt.figure(figsize=(10, 10))
@@ -188,36 +192,38 @@ def plot_reprojection_analysis(
     
     plt.savefig(f"{output_dir}/reprojection_analysis_camera_{camera_id}{before_or_after}.png")
 
-def plot_3d_splines(triangulated_points, correspondences, main_camera_id, secondary_camera_id, output_dir="plots"):
-    """Plot 3D splines based on the triangulated points and time-continuity."""
-    splines_3d_points = []
-    this_spline = []
+def plot_3d_splines_from_functions(splines_3d, main_camera_id, secondary_camera_id, output_dir="plots", title=None):
+    """
+    Plot 3D splines given as a list of (spline_x, spline_y, spline_z, timestamps).
 
-    for i, current_corr in enumerate(correspondences[:-1]):
-        if i >= len(triangulated_points):
-            break
-        next_corr = correspondences[i + 1]
-        this_spline.append(triangulated_points[i])
-
-        if next_corr[2] - current_corr[2] >= 5:
-            splines_3d_points.append(this_spline)
-            this_spline = []
-
-    this_spline.append(triangulated_points[-1])
-    splines_3d_points.append(this_spline)
-
-    # Filter splines
-    splines_3d_points = [spline for spline in splines_3d_points if spline and len(spline) >= 4]
-
+    Parameters
+    ----------
+    splines_3d : list of tuples
+        Each tuple is (spline_x, spline_y, spline_z, timestamps), where spline_x/y/z are callable and timestamps is an array.
+    main_camera_id : int or str
+        Identifier for the main camera.
+    secondary_camera_id : int or str
+        Identifier for the secondary camera.
+    output_dir : str
+        Directory to save the plot.
+    title : str, optional
+        Custom plot title.
+    """
     fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
-    for spline in splines_3d_points:
-        spline = np.array(spline)
-        ax.plot(spline[:, 0], spline[:, 1], spline[:, 2], marker='o', markersize=1)
+    for spline_x, spline_y, spline_z, ts in splines_3d:
+        ax.plot(
+            spline_x(ts),
+            spline_y(ts),
+            spline_z(ts),
+            marker='o',
+            markersize=1
+        )
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_title(f"3D Splines for Cameras {main_camera_id}-{secondary_camera_id}")
+    plot_title = title if title else f"3D Splines for Cameras {main_camera_id}-{secondary_camera_id}"
+    ax.set_title(plot_title)
     plt.savefig(f"{output_dir}/3d_splines_{main_camera_id}_{secondary_camera_id}.png", dpi=300)
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
@@ -269,5 +275,5 @@ def plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera
     ax.set_zlabel("Z")
     ax.legend()
     
-    plt.savefig(f"{plot_output_dir}/3d_points_and_splines_{main_camera}_{new_camera}.png")
+    plt.savefig(f"{plot_output_dir}/Extension to splines {main_camera}_{new_camera}.png")
 
