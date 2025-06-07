@@ -39,7 +39,7 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 # Add both handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
-DATASET_NO = 1
+DATASET_NO = 3
 
 def search_optimal_beta(frames, splines, camera_info, main_camera, secondary_camera, dataset_no, beta_shift):
     """
@@ -273,6 +273,6 @@ df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
 
 first_beta_search(
     dataset_no=DATASET_NO,
-    beta_shift=3000
+    beta_shift=2000
 )
 logging.info("Beta search completed")
