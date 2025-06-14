@@ -192,7 +192,7 @@ def plot_reprojection_analysis(
     
     plt.savefig(f"{output_dir}/reprojection_analysis_camera_{camera_id}{before_or_after}.png")
 
-def plot_3d_splines_from_functions(splines_3d, main_camera_id, secondary_camera_id, output_dir="plots", title=None):
+def plot_3d_splines_from_functions(splines_3d, main_camera_id, secondary_camera_id, iteration_num, output_dir="plots", title=None):
     """
     Plot 3D splines given as a list of (spline_x, spline_y, spline_z, timestamps).
 
@@ -224,11 +224,11 @@ def plot_3d_splines_from_functions(splines_3d, main_camera_id, secondary_camera_
     ax.set_zlabel('Z')
     plot_title = title if title else f"3D Splines for Cameras {main_camera_id}-{secondary_camera_id}"
     ax.set_title(plot_title)
-    plt.savefig(f"{output_dir}/3d_splines_{main_camera_id}_{secondary_camera_id}.png", dpi=300)
+    plt.savefig(f"{output_dir}/3d_splines_it{iteration_num}_{main_camera_id}_{secondary_camera_id}.png")
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
 
-def plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera, plot_output_dir="plots"):
+def plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera, iteration_num, plot_output_dir="plots"):
     """
     Plots 3D splines and triangulated points for a given camera pair and saves the figure.
     Parameters
@@ -275,5 +275,5 @@ def plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera
     ax.set_zlabel("Z")
     ax.legend()
     
-    plt.savefig(f"{plot_output_dir}/Extension to splines {main_camera}_{new_camera}.png")
+    plt.savefig(f"{plot_output_dir}/Extension_to_splines_it{iteration_num}_{main_camera}_{new_camera}.png")
 

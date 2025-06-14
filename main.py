@@ -19,6 +19,7 @@ from data_loader import load_dataframe
 from global_fn import *
 from plotter import *
 from bundle_adjustment import bundle_adjust_camera_pose
+import shutil
 
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
@@ -46,7 +47,17 @@ args = parser.parse_args()
 
 DATASET_NO = args.dataset_no
 plot_output_dir = f"plots/dataset{DATASET_NO}"
-os.makedirs(plot_output_dir, exist_ok=True)
+
+# Empty plot_output_dir if it exists, otherwise create it
+if os.path.exists(plot_output_dir):
+    for filename in os.listdir(plot_output_dir):
+        file_path = os.path.join(plot_output_dir, filename)
+        if os.path.isfile(file_path) or os.path.islink(file_path):
+            os.unlink(file_path)
+        elif os.path.isdir(file_path):
+            shutil.rmtree(file_path)
+else:
+    os.makedirs(plot_output_dir, exist_ok=True)
 
 
 def to_normalized_camera_coord(pts, K, distcoeff):
@@ -439,6 +450,8 @@ if __name__ == "__main__":
     
     # =================================================================== Step 0: Load data and search for betas ===================================================================
     
+    logging.info("Starting 3D Offline Spline Reconstruction: dataset %d", DATASET_NO)
+    
     camera_poses = []
     
     # Load camera info (camera IDs from cameras.txt)
@@ -461,6 +474,7 @@ if __name__ == "__main__":
     logging.info("Loading beta results")  
     betas_df = pd.read_csv(f"beta_results_dataset{DATASET_NO}.csv")
     betas_df = betas_df.sort_values(by='inlier_ratio', ascending=False)
+    # betas_df = betas_df[(betas_df['main_camera'] != 0) & (betas_df['secondary_camera'] != 0)]  # Filter out invalid camera pairs
     # Create a 2D array with all betas from betas_df: [secondary_camera][main_camera]
     beta_array = betas_df.pivot(index='secondary_camera', columns='main_camera', values='beta').fillna(0).to_numpy()
     
@@ -513,7 +527,7 @@ if __name__ == "__main__":
     
     # Compute first 3D splines
     splines_3d = generate_3d_splines(triangulated_points_first_step_with_timestamps, [])
-    plot_3d_splines_from_functions(splines_3d, main_camera, secondary_camera, output_dir=plot_output_dir, title=f"3D Splines after first triangulation")
+    plot_3d_splines_from_functions(splines_3d, main_camera, secondary_camera, 0, output_dir=plot_output_dir, title=f"3D Splines after first triangulation")
         
     # =================================================================== Step 2.1: Add cameras in decreasing order of inlier ratio ===================================================================
     cameras_processed = [int(main_camera), int(secondary_camera)]
@@ -655,7 +669,7 @@ if __name__ == "__main__":
         tpns_to_add_to_3d_with_timestamps = tpns_with_timestamps[np.logical_not(mask)]        
         # plot_triangulated_points(triangulated_points_nth_step, main_camera, third_camera, output_dir=plot_output_dir)
         
-        plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera, plot_output_dir=plot_output_dir)
+        plot_spline_extension(tpns_to_add_to_3d, splines_3d, main_camera, new_camera, len(cameras_processed), plot_output_dir=plot_output_dir)
             
         # Add new points as splines or extend existing ones
         splines_3d = generate_3d_splines(tpns_to_add_to_3d_with_timestamps, splines_3d)
@@ -683,32 +697,32 @@ if __name__ == "__main__":
             output_dir=plot_output_dir, initial=True
         )
         
-        # Refine camera pose with bundle adjustment using new splines
-        for camera_pose in camera_poses:
-            if camera_pose["R"] is None or camera_pose["cam_id"] != int(new_camera):
-                continue
-            i = camera_pose["cam_id"]
-            frames = df[df['cam_id'] == i][['frame_id', 'detection_x', 'detection_y']].values
-            frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
-            frames = np.array(frames)
-            frames_ids = frames[:, 0]
-            bbbb = beta_array[int(i)][int(main_camera)]
-            global_ts = compute_global_time(frames_ids, camera_info[int(main_camera)].fps/camera_info[i].fps, bbbb)
-            frames = np.column_stack((global_ts, frames[:, 1], frames[:, 2]))
+        # # Refine camera pose with bundle adjustment using new splines
+        # for camera_pose in camera_poses:
+        #     if camera_pose["R"] is None or camera_pose["cam_id"] != int(new_camera):
+        #         continue
+        #     i = camera_pose["cam_id"]
+        #     frames = df[df['cam_id'] == i][['frame_id', 'detection_x', 'detection_y']].values
+        #     frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
+        #     frames = np.array(frames)
+        #     frames_ids = frames[:, 0]
+        #     bbbb = beta_array[int(i)][int(main_camera)]
+        #     global_ts = compute_global_time(frames_ids, camera_info[int(main_camera)].fps/camera_info[i].fps, bbbb)
+        #     frames = np.column_stack((global_ts, frames[:, 1], frames[:, 2]))
 
-            ret = bundle_adjust_camera_pose(
-                splines_3d,
-                frames,
-                camera_info[i].K_matrix,
-                camera_info[i].distCoeff,
-                cv.Rodrigues(camera_poses[i]["R"])[0],
-                camera_poses[i]["t"]
-            )
+        #     ret = bundle_adjust_camera_pose(
+        #         splines_3d,
+        #         frames,
+        #         camera_info[i].K_matrix,
+        #         camera_info[i].distCoeff,
+        #         cv.Rodrigues(camera_poses[i]["R"])[0],
+        #         camera_poses[i]["t"]
+        #     )
             
-            camera_poses[i]["R"] = ret['R']
-            camera_poses[i]["t"] = ret['tvec']
+        #     camera_poses[i]["R"] = ret['R']
+        #     camera_poses[i]["t"] = ret['tvec']
             
-        plot_3d_splines_from_functions(splines_3d, main_camera, new_camera, output_dir=plot_output_dir, title=f"3D Splines after adding {len(cameras_processed)+1}th camera")
+        plot_3d_splines_from_functions(splines_3d, main_camera, new_camera, len(cameras_processed), output_dir=plot_output_dir, title=f"3D Splines after adding {len(cameras_processed)+1}th camera")
         
         cameras_processed.append(int(new_camera)) # Add new camera to processed list
         

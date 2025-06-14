@@ -32,7 +32,7 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 # Add both handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
-DATASET_NO = 4
+DATASET_NO = 3
 
 
 def compute_global_time(frame_indices, alpha, beta = 0):
@@ -87,10 +87,34 @@ def main():
             [-3618.11, -646.52, -682.02, -588.87, -919.51,    0.00, -3071.00],
             [3745.56, 3022.07, 3003.04, 3099.07, 2762.22, 6142.00,     0.00]
         ])
+        
+    elif DATASET_NO == 3:
+        # Time scale (alpha)
+        alpha = np.array([
+            [1.0000, 0.5005, 0.4960, 0.4171, 0.5000, 0.8341],
+            [1.9982, 1.0000, 0.9910, 0.8333, 0.9990, 1.6667],
+            [2.0163, 1.0091, 1.0000, 0.8409, 1.0081, 1.6819],
+            [2.3978, 1.2000, 1.1892, 1.0000, 1.1988, 2.0000],
+            [2.0001, 1.0010, 0.9919, 0.8342, 1.0000, 1.6683],
+            [1.1989, 0.6000, 0.5946, 0.5000, 0.5994, 1.0000]
+        ])
+
+        # Time shift (beta)
+        beta = np.array([
+            [0.00, 1013.95, 546.98, 251.16, 961.02, 137.51],
+            [-2026.04, 0.00, -457.83, -593.82, -51.96, -1552.47],
+            [-1102.90, 461.99, 0.00, -208.81, 409.59, -782.45],
+            [-602.21, 712.57, 248.32, 0.00, 659.93, -364.81],
+            [-1922.12, 52.01, -406.29, -551.00, 0.00, -1465.78],
+            [-164.85, 931.45, 465.22, 182.40, 878.60, 0.00]
+        ])
 
     df = df[(df['detection_x'] != 0.0) & (df['detection_y'] != 0.0)]
+    
+    num_cameras = 7 if DATASET_NO == 4 else 6
+    fps_ref_camera = 59.940060
 
-    for i in range(0, 7):
+    for i in range(0, num_cameras):
         df_camera = df[df['cam_id'] == i]
         frame_ids = df_camera['frame_id'].values
         global_ts = compute_global_time(frame_ids, alpha[i, 0], beta[i, 0])
@@ -107,10 +131,10 @@ def main():
     # Publish each detection as a message
     for _, row in df_sorted.iterrows():
         msg = Float32MultiArray()
-        msg.data = [row['global_ts']/59.940060, float(row['cam_id']), row['detection_x'], row['detection_y']] # Timestamp in seconds
+        msg.data = [row['global_ts']/fps_ref_camera, float(row['cam_id']), row['detection_x'], row['detection_y']] # Timestamp in seconds
         logging.info(f"Publishing detection: {msg.data}")
         publisher.publish(msg)
-        rclpy.spin_once(node, timeout_sec=0.01)  # Allow ROS to process events
+        rclpy.spin_once(node, timeout_sec=0.001)  # Allow ROS to process events
 
     node.get_logger().info("All detections published.")
     rclpy.shutdown()

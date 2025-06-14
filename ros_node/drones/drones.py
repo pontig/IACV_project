@@ -24,21 +24,24 @@ from scipy.spatial.transform import Rotation as Rot
 matplotlib.use('Agg')  # Use non-GUI backend for matplotlib
 
 class MainNode(Node):
-    def __init__(self, camera_calibrations):
+    def __init__(self, camera_calibrations_3, camera_calibrations_4):
         super().__init__('detections_subscriber')
         
+        DATASET_NO = 3
+        camera_calibrations = camera_calibrations_3 if DATASET_NO == 3 else camera_calibrations_4
+        
         # PARAMETERS
-        self.min_points_for_spline = 4          # Minimum number of points to fit a spline
-        self.max_time_gap = .5                  # Maximum time gap between points to consider them part of the same spline (in seconds)
-        self.cameras_to_ignore_for_F = [0]      # Cameras to ignore when computing the Fundamental matrix (see report) 
-        self.cameras_to_ignore = [3, 0]         # Cameras to ignore for triangulation and localization (see report)
-        self.min_correspondences = 2000         # Minimum number of correspondences to compute the first Fundamental matrix
-        self.min_accettable_f = 0.8             # Minimum acceptable ratio of inliers to total points for the Fundamental matrix
-        self.possible_values = range(0, 7)      # Possible camera IDs
-        self.mode = "CALIBRATION"               # Stage of the node: "CALIBRATION" or "TRACKING"
-        self.message_count = 0                  # Count of messages received
-        self.points_to_rviz = 100000            # Number of points to visualize in RViz
-        self.period_update_splines = 3000       # Update 3D splines every x messages
+        self.min_points_for_spline = 4                                      # Minimum number of points to fit a spline
+        self.max_time_gap = .5                                              # Maximum time gap between points to consider them part of the same spline (in seconds)
+        self.cameras_to_ignore_for_F = [0]                                  # Cameras to ignore when computing the Fundamental matrix (see report) 
+        self.cameras_to_ignore = [2, 0]                                     # Cameras to ignore for triangulation and localization (see report)
+        self.min_correspondences = 2000                                     # Minimum number of correspondences to compute the first Fundamental matrix
+        self.min_accettable_f = 0.8                                         # Minimum acceptable ratio of inliers to total points for the Fundamental matrix
+        self.possible_values = range(0, camera_calibrations.__len__())      # Possible camera IDs
+        self.mode = "CALIBRATION"                                           # Stage of the node: "CALIBRATION" or "TRACKING"
+        self.message_count = 0                                              # Count of messages received
+        self.points_to_rviz = 100000                                        # Number of points to visualize in RViz
+        self.period_update_splines = 3000                                   # Update 3D splines every x messages
 
         # ATTRIBUTES INITIALIZATION
         self.camera_calibrations = {cam['camera_id']: cam for cam in camera_calibrations}
@@ -51,6 +54,7 @@ class MainNode(Node):
         self.camera_poses = [None] * len(self.possible_values)  # Array of (t, R) tuples for each camera
         self.trajectory = []  # List of 3D points for the trajectory
         self.trajectory_timestamps = []  # List of timestamps for the trajectory points
+        self.max_correspondences_up_to_now = 0  # Maximum number of correspondences found so far
         
         # PUBLISHERS AND SUBSCRIBERS
         self.tf_broadcaster = StaticTransformBroadcaster(self)
@@ -69,7 +73,7 @@ class MainNode(Node):
             blank_image = np.ones((resolution[1], resolution[0], 3), dtype=np.uint8) * 255
             image_msg = self.cv_bridge.cv2_to_imgmsg(blank_image, encoding='bgr8')
             self.image_publishers[cam_id].publish(image_msg)
-
+        
         self.pointcloud_publisher = self.create_publisher(PointCloud2, '/live_trajectory', 10)
         # self.splines_publisher = self.create_publisher(PointCloud2, '/splines', 10)
         
@@ -314,6 +318,9 @@ class MainNode(Node):
                         # Add correspondence: (spline point, other camera point, timestamp)
                         spline_point = (float(spline_x(point[0])), float(spline_y(point[0])))
                         self.point_correspondences[element_1][other_camera].append((spline_point, (point[2], point[3]), point[0]))
+                        # if len(self.point_correspondences[element_1][other_camera]) > self.max_correspondences_up_to_now:
+                        #     self.max_correspondences_up_to_now = len(self.point_correspondences[element_1][other_camera])
+                        #     self.get_logger().info(f'New max correspondences: {self.max_correspondences_up_to_now} between cameras {element_1} and {other_camera}')
             
             # Try computing the Fundamental matrix if enough correspondences are found
             if (
@@ -410,6 +417,9 @@ class MainNode(Node):
                     # Store timestamps for each triangulated point
                     self.trajectory_timestamps = [p[2] for p in self.point_correspondences[element_1][other_camera]]
                     self.compute_3d_splines()
+                
+                # else:
+                #     self.get_logger().warn(f'Insufficient inliers for Fundamental matrix between cameras {element_1} and {other_camera}: {np.sum(mask)} inliers out of {len(mask)} correspondences')
                     
     def compute_3d_splines(self):
         # Convert trajectory and timestamps to a single array for processing
@@ -808,7 +818,7 @@ class MainNode(Node):
 
 def main(args=None):
     # Example camera calibration data structure
-    camera_calibrations = [
+    camera_calibrations_ds4 = [
         {
             "camera_id": 0,
             "comment":["Templete for providing camera information.",
@@ -929,12 +939,115 @@ def main(args=None):
             "resolution":[1440,1080]
 
         }
+    ]
+    
+    camera_calibrations_ds3 = [
+        {
+            "camera_id": 0,
+            "comment":["Templete for providing camera information.",
+                    "The path of this file should be included in the 'config.json' file under 'path_cameras'",
+                    "K-matrix should be a 3*3 matrix",
+                    "distCoeff should be a vector of [k1,k2,p1,p2[,k3]]"],
 
+            "K-matrix":[[874.4721846047786, 0.0, 970.2688358898922], [0.0, 894.1080937815644, 531.2757796052425], [0.0, 0.0, 1.0]],
+
+            "distCoeff":[-0.260720634999793, 0.07494782427852716, -0.00013631462898833923, 0.00017484761775924765, -0.00906247784302948],
+                
+            "fps":59.940060,
+
+            "resolution":[1920,1080]
+
+        },
+        {
+            "camera_id": 1,
+            "comment":["Templete for providing camera information.",
+                    "The path of this file should be included in the 'config.json' file under 'path_cameras'",
+                    "K-matrix should be a 3*3 matrix",
+                    "distCoeff should be a vector of [k1,k2,p1,p2[,k3]]"],
+
+            "K-matrix":[[1569.2133510353567, 0.0, 956.6414016207103], [0.0, 1572.0082312735778, 533.1129574904855], [0.0, 0.0, 1.0]],
+
+            "distCoeff":[0.1888803002995303, -0.6268259695581048, -0.0014010104725158184, 0.0003932341772251142, 0.6061741343069857],
+                
+            "fps":30.0,
+
+            "resolution":[1920,1080]
+
+        },
+        {
+            "camera_id": 2,
+            "comment":["Templete for providing camera information.",
+                    "The path of this file should be included in the 'config.json' file under 'path_cameras'",
+                    "K-matrix should be a 3*3 matrix",
+                    "distCoeff should be a vector of [k1,k2,p1,p2[,k3]]"],
+
+            "K-matrix":[[3264.997613980756, 0.0, 1871.0028562370057], [0.0, 3245.0203739800636, 1002.0844321863265], [0.0, 0.0, 1.0]],
+
+            "distCoeff":[0.18419266153533212, -0.7557852934198697, -0.0013645512787729467, -0.002783809883555535, 0.9397964121421092],
+
+            "fps":30,
+
+            "resolution":[3840,2160]
+
+        },
+        {
+            "camera_id": 3,
+            "comment":["Templete for providing camera information.",
+                    "The path of this file should be included in the 'config.json' file under 'path_cameras'",
+                    "K-matrix should be a 3*3 matrix",
+                    "distCoeff should be a vector of [k1,k2,p1,p2[,k3]]"],
+
+            "K-matrix":[[1176.899407018602, 0.0, 702.661410507918], [0.0, 1572.936467868805, 532.023006642381], [0.0, 0.0, 1.0]],
+
+            "distCoeff":[-0.104075713538,  0.141342139932, -0.000084551089,
+                -0.000391293455, -0.068036995013],
+                
+            "fps":25,
+
+            "resolution":[1440,1080]
+
+        },
+        {
+            "camera_id": 4,
+            "comment":["Templete for providing camera information.",
+                    "The path of this file should be included in the 'config.json' file under 'path_cameras'",
+                    "K-matrix should be a 3*3 matrix",
+                    "distCoeff should be a vector of [k1,k2,p1,p2[,k3]]"],
+
+            "K-matrix":[[1545.425401191011, 0.0, 971.158336917263], 
+                [0.0, 1545.96703364831, 535.682080735544], 
+                [0.0, 0.0, 1.0]],
+
+            "distCoeff":[-0.011232359677,  0.045931232417,  0.000263868094, -0.001253638454, -0.151703077572],
+
+            "fps":29.970030,
+
+            "resolution":[1920,1080]
+
+        },
+        {
+            "camera_id": 5,
+            "comment":["Templete for providing camera information.",
+                    "The path of this file should be included in the 'config.json' file under 'path_cameras'",
+                    "K-matrix should be a 3*3 matrix",
+                    "distCoeff should be a vector of [k1,k2,p1,p2[,k3]]"],
+
+            "K-matrix":[[1506.6612, 0,  966.6623],
+                        [0, 1505.2822,  530.2608],
+                        [0, 0,  1]],
+
+            "distCoeff":[-0.006673507597820779, 0.007775663251591633, 0, 0],
+                
+            "fps":50,
+
+            "resolution":[1920,1080]
+
+        }
 
     ]
     
     rclpy.init(args=args)
-    node = MainNode(camera_calibrations)
+    node = MainNode(camera_calibrations_ds3, camera_calibrations_ds4)
 
     try:
         rclpy.spin(node)
