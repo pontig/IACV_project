@@ -94,6 +94,7 @@ Our project closely follows the methodology outlined in the paper, but it is not
         Bundle adjustment: least force                  & No                   &                                                                                                                    \\\hline
         Offline trajectory reconstruction               & Yes                  &                                                                                                                    \\\hline
         Online trajectory reconstruction                & Yes                  &                                                                                                                    \\\hline
+        Dataset processed                               & All but 5            & Absence of camera detections                                                                                       \\\hline
     \end{tabularx}
     \caption{Comparison between our implementation and the original work}
     \label{tab:comparison}
@@ -101,11 +102,9 @@ Our project closely follows the methodology outlined in the paper, but it is not
 
 \section{Implementation}
 
-Our implementation of the project closely follows the methodology outlined in the paper, even though it is not as complete as the original work.
-
 The dataset used for this project is the same used and described in the paper, that is accessible at \url{https://github.com/CenekAlbl/drone-tracking-datasets}
 
-We decided to focus on three main aspects of the pipeline:
+We decided to focus on the main aspects of the pipeline:
 
 \begin{itemize}
     \item \textbf{Camera intrinsic calibration:} A method to calibrate the cameras and obtain their intrinsic parameters
@@ -146,7 +145,7 @@ To improve robustness, especially during frames where the drone was not clearly 
     \includegraphics[width=.75\textwidth]{imgs/drone_detection_bs.png}
     \includegraphics[width=.75\textwidth]{imgs/drone_detection_of.png}
     \includegraphics[width=.75\textwidth]{imgs/drone_detection_yolo.png}
-    \caption{Drone detection results using background subtraction (top), optical flow tracking (middle), and YOLOv8 (bottom)}
+    \caption{Frames taken from the result of the drone detection background subtraction (top), optical flow tracking (middle), and YOLOv8 (bottom)}
     \label{fig:drone_detection}
 \end{figure}
 
@@ -255,10 +254,10 @@ Once each new camera was registered, we could extend the 3D splines to include t
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=.45\textwidth]{../plots/dataset4/3d_points_and_splines_4.0_6.0.png}
-    \includegraphics[width=.45\textwidth]{../plots/dataset4/3d_points_and_splines_5.0_0.0.png}
-    \includegraphics[width=.45\textwidth]{../plots/dataset4/3d_points_and_splines_4.0_2.0.png}
-    \includegraphics[width=.45\textwidth]{../plots/dataset4/3d_points_and_splines_6.0_1.0.png}
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it2_4.0_6.0.png}
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it3_5.0_0.0.png}
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it4_4.0_2.0.png}
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it5_6.0_1.0.png}
     \caption{Example of how the 3D splines are extended with the addition of new cameras (dataset 4). When a new camera is registered, the already existing 3D splines (red) are extended to include the new 3D points (blue)}
     \label{fig:3d_splines_extension}
 \end{figure}
@@ -362,6 +361,8 @@ Another limitation of the offline trajectory reconstruction is that the process 
 
 This problem triggered a cascade effect: the inaccuracies in the 3D splines led to poor triangulation of new points, which in turn caused further inaccuracies in the camera poses.
 
+In particular, for the reasons above we weren't able to reconstruct the 3D trajectory at all with the offline approach for the dataset3
+
 \subsection{Online Trajectory Reconstruction}
 
 The online trajectory reconstruction algorithm suffered from similar limitations as the offline one, and they were even more pronounced due to the real-time nature of the implementation.
@@ -440,7 +441,7 @@ This script will save in the \texttt{plots/} folder a \texttt{.mp4} video with t
 
 \subsection{Offline Trajectory Reconstruction}
 
-The offline trajectory reconstruction is divided in two scripts, one for the $\beta$ search and one for the trajectory reconstruction. We decided to split the two scripts since the first one is quite time consuming, and it can be run only once for each dataset. 
+The offline trajectory reconstruction is divided in two scripts, one for the $\beta$ search and one for the trajectory reconstruction. We decided to split the two scripts since the first one is quite time consuming, and it can be run only once for each dataset.
 
 To run the $\beta$ search, you can execute the following command:
 
@@ -463,32 +464,76 @@ positional arguments:
 
 This script will execute all the steps described in above, saving all the results in the \texttt{plots/} folder. To see the results, in a more interactive way, you can uncomment the very last line of the script, which will display all the intermediate results (Note: this will open a lot of windows, so it is recommended to comment it back after you are done).
 
-Even if it is heavily parallelized, the $\beta$ search is still very time consuming. For this reason, we suggest not to delete the \texttt{.csv} files named \texttt{beta\_results\_dataset\_X.csv}, since the trajectory reconstruction script will automatically load the results from these files, and it will fail if they are not present. 
+Even if it is heavily parallelized, the $\beta$ search is still very time consuming. For this reason, we suggest not to delete the \texttt{.csv} files named \texttt{beta\_results\_dataset\_X.csv}, since the trajectory reconstruction script will automatically load the results from these files, and it will fail if they are not present.
 
 \subsection{Online Trajectory Reconstruction}
 
 The online trajectory reconstruction is a bit more complex, as it requires ROS2 to be installed and running.
 
-The code is structured in a ROS2 package, that has to be put in the \texttt{src/} folder of a ROS2 workspace. To run the online trajectory reconstruction, you need to follow these steps (assuming you are in the ROS2 workspace root directory):
+The code is structured in a ROS2 package, that has to be put in the \texttt{src/} folder of a ROS2 workspace. For semplicity, we already attached the ROS2 bag file containing the live drone detections, so you can run the online trajectory reconstruction without having to generate the bag file yourself. However, if you want to generate the bag, you can follow the instructions below.
+
+The bag generation can be done by putting the \texttt{.csv} file with the drone detections generated in the offline trajectory reconstruction step in the same location from which you want to run the ROS2 node, and then running the following command:
 
 \begin{verbatim}
-colcon build
-source install/setup.bash
-ros2 run drones drones
-ros2 bag play <path_to_the_bag_file> -r 1.5
+    colcon build
+    source install/setup.bash
+    ros2 run drones live_detections_generator
 \end{verbatim}
 
-This will start the ROS2 node that reconstructs the drone trajectory in real-time, and it will replay the bag file containing the drone detections (the bag file is already provided in the repository). The rate of the replay can be adjusted with the \texttt{-r} option, but we suggest to keep it at 1.5x the original speed, as this is the speed that most closely resembles the real-time time flow of the dataset.
+This will publish the drone detections in a ROS2 topic, and in order to save them in a ROS2 bag file, you can run the following command in another terminal:
+
+\begin{verbatim}
+    ros2 bag record -o <name_of_the_bag_file> /detections
+\end{verbatim}
+
+To run the online trajectory reconstruction, you need to follow these steps (assuming you are in the ROS2 workspace root directory):
+
+\begin{verbatim}
+    colcon build
+    source install/setup.bash
+    ros2 run drones drones
+\end{verbatim}
+
+Then, in another terminal:
+
+\begin{verbatim}
+ros2 bag play <path_to_the_bag_file> -r <0.2 | 1.5>
+\end{verbatim}
+
+This will start the ROS2 node that reconstructs the drone trajectory in real-time, and it will replay the bag file containing the drone detections (the bag file is already provided in the repository). The rate of the replay can be adjusted with the \texttt{-r} option, but we suggest to keep it at 1.5x the original speed for dataset 4 and 0.2 for dataset 3, as this is the speed that most closely resembles the real-time time flow of the dataset.
 
 To keep the node implementation as simple as possible, instead of following the ROS2 conventions and having a launch file and a configuration file, we decided to hardcode the parameters in the node itself. This means that you will have to modify the first lines of the \texttt{drones.py} file to change the parameters of the algorithm.
+
+\section{Content of the repository}
+
+The repository contains the following folders and files:
+\begin{itemize}
+    \item \texttt{plots/}: Contains all output results from each step of the project. This includes:
+          \begin{itemize}
+              \item Intrinsic calibration results for each camera, with comparisons to the dataset's ground truth.
+              \item Drone detection results for all three methods (background subtraction, optical flow, YOLOv8), including overlaid videos, \texttt{json} files with detections, and analysis plots (provided for a subset of videos to keep the repository size manageable).
+              \item Offline trajectory reconstruction results, organized by dataset.
+              \item Online trajectory reconstruction results, including videos showing live trajectory construction.
+              \item Results of the $\beta$ search for temporal alignment.
+          \end{itemize}
+    \item \texttt{ros\_node/}: Contains the ROS2 package for online trajectory reconstruction, structured as follows:
+          \begin{itemize}
+              \item \texttt{bags/}: ROS2 bag files for datasets 3 and 4, used to test the online trajectory reconstruction.
+              \item \texttt{config/rviz2\_config.yaml.rviz2}: RViz2 configuration file for visualizing the reconstructed trajectory and camera positions.
+              \item \texttt{drones/drones.py}: Main ROS2 node that performs real-time drone trajectory reconstruction.
+              \item \texttt{drones/live\_detections\_generator.py}: ROS2 node that publishes live drone detections from the \texttt{.csv} files.
+          \end{itemize}
+    \item Other files: These include the CSV files listing the $\beta$ values found for each dataset, as well as the main scripts for running the offline trajectory reconstruction and drone detection algorithms.
+\end{itemize}
+
+All the scripts are well commented, so they should be easy to understand and modify.
+
 
 \section{Conclusions}
 
 This project presents a robust and modular implementation of a drone trajectory reconstruction pipeline, inspired by state-of-the-art methods in outside-in tracking with unsynchronized cameras. The implementation covers key components, with careful integration of computer vision tools and frameworks like OpenCV and ROS2. Although the pipeline suffers from several limitations, it demonstrates strong potential for scalable, low-cost UAV tracking in real-world conditions.
 
 Future improvements could focus on refining the bundle adjustment process to incorporate motion regularization, improving robustness to camera variability, and enhancing the detection component for better performance in occluded or low-visibility scenarios. Despite the challenges, this work serves as a strong foundation for further research and development in drone tracking systems using consumer-grade equipment.
-
-{\color{red} scrivere che il codice è già bello commentato, descrivere i files che sono allegati}
 
 \section*{Bulky Plots}
 

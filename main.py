@@ -474,7 +474,6 @@ if __name__ == "__main__":
     logging.info("Loading beta results")  
     betas_df = pd.read_csv(f"beta_results_dataset{DATASET_NO}.csv")
     betas_df = betas_df.sort_values(by='inlier_ratio', ascending=False)
-    # betas_df = betas_df[(betas_df['main_camera'] != 0) & (betas_df['secondary_camera'] != 0)]  # Filter out invalid camera pairs
     # Create a 2D array with all betas from betas_df: [secondary_camera][main_camera]
     beta_array = betas_df.pivot(index='secondary_camera', columns='main_camera', values='beta').fillna(0).to_numpy()
     
@@ -697,30 +696,30 @@ if __name__ == "__main__":
             output_dir=plot_output_dir, initial=True
         )
         
-        # # Refine camera pose with bundle adjustment using new splines
-        # for camera_pose in camera_poses:
-        #     if camera_pose["R"] is None or camera_pose["cam_id"] != int(new_camera):
-        #         continue
-        #     i = camera_pose["cam_id"]
-        #     frames = df[df['cam_id'] == i][['frame_id', 'detection_x', 'detection_y']].values
-        #     frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
-        #     frames = np.array(frames)
-        #     frames_ids = frames[:, 0]
-        #     bbbb = beta_array[int(i)][int(main_camera)]
-        #     global_ts = compute_global_time(frames_ids, camera_info[int(main_camera)].fps/camera_info[i].fps, bbbb)
-        #     frames = np.column_stack((global_ts, frames[:, 1], frames[:, 2]))
+        # Refine camera pose with bundle adjustment using new splines
+        for camera_pose in camera_poses:
+            if camera_pose["R"] is None or camera_pose["cam_id"] != int(new_camera):
+                continue
+            i = camera_pose["cam_id"]
+            frames = df[df['cam_id'] == i][['frame_id', 'detection_x', 'detection_y']].values
+            frames = [frame for frame in frames if frame[1] != 0.0 and frame[2] != 0.0]
+            frames = np.array(frames)
+            frames_ids = frames[:, 0]
+            bbbb = beta_array[int(i)][int(main_camera)]
+            global_ts = compute_global_time(frames_ids, camera_info[int(main_camera)].fps/camera_info[i].fps, bbbb)
+            frames = np.column_stack((global_ts, frames[:, 1], frames[:, 2]))
 
-        #     ret = bundle_adjust_camera_pose(
-        #         splines_3d,
-        #         frames,
-        #         camera_info[i].K_matrix,
-        #         camera_info[i].distCoeff,
-        #         cv.Rodrigues(camera_poses[i]["R"])[0],
-        #         camera_poses[i]["t"]
-        #     )
+            ret = bundle_adjust_camera_pose(
+                splines_3d,
+                frames,
+                camera_info[i].K_matrix,
+                camera_info[i].distCoeff,
+                cv.Rodrigues(camera_poses[i]["R"])[0],
+                camera_poses[i]["t"]
+            )
             
-        #     camera_poses[i]["R"] = ret['R']
-        #     camera_poses[i]["t"] = ret['tvec']
+            camera_poses[i]["R"] = ret['R']
+            camera_poses[i]["t"] = ret['tvec']
             
         plot_3d_splines_from_functions(splines_3d, main_camera, new_camera, len(cameras_processed), output_dir=plot_output_dir, title=f"3D Splines after adding {len(cameras_processed)+1}th camera")
         
