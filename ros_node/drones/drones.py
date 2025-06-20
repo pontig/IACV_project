@@ -27,14 +27,15 @@ class MainNode(Node):
     def __init__(self, camera_calibrations_3, camera_calibrations_4):
         super().__init__('detections_subscriber')
         
-        DATASET_NO = 3
+        DATASET_NO = 4
         camera_calibrations = camera_calibrations_3 if DATASET_NO == 3 else camera_calibrations_4
+        cam_ign = [2, 0] if DATASET_NO == 3 else [3, 0] 
         
         # PARAMETERS
         self.min_points_for_spline = 4                                      # Minimum number of points to fit a spline
         self.max_time_gap = .5                                              # Maximum time gap between points to consider them part of the same spline (in seconds)
         self.cameras_to_ignore_for_F = [0]                                  # Cameras to ignore when computing the Fundamental matrix (see report) 
-        self.cameras_to_ignore = [2, 0]                                     # Cameras to ignore for triangulation and localization (see report)
+        self.cameras_to_ignore = cam_ign                                    # Cameras to ignore for triangulation and localization (see report)
         self.min_correspondences = 2000                                     # Minimum number of correspondences to compute the first Fundamental matrix
         self.min_accettable_f = 0.8                                         # Minimum acceptable ratio of inliers to total points for the Fundamental matrix
         self.possible_values = range(0, camera_calibrations.__len__())      # Possible camera IDs

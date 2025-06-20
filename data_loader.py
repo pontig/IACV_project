@@ -102,7 +102,9 @@ def load_dataframe(cameras, dataset_no):
                 detections_i[j] = (detections_i[j][0], dst[cnt][0][0], dst[cnt][0][1])
                 cnt += 1
         image = cv.imread(f'drone-tracking-datasets/dataset{dataset_no}/cam{i}.jpg')
+        cv.imwrite(f'plots/dataset{dataset_no}/cam{i}_undistorted.jpg', image)
         image = cv.undistort(image, camera_info_i.K_matrix, camera_info_i.distCoeff, None, new_camera_matrix)
+        cv.imwrite(f'plots/dataset{dataset_no}/cam{i}_undistorted_optimal.jpg', image)
         
         camera_info_i.K_matrix = new_camera_matrix
         camera_info_i.distCoeff = np.array([0.0, 0.0, 0.0, 0.0, 0.0])

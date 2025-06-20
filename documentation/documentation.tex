@@ -187,7 +187,7 @@ The next step was to reconstruct the drone's trajectory by loading all the detec
 
 The first step was to load the drone detections from the dataset. The dataset provides the drone detections in various \texttt{txt} files, divided in the repo by dataset and camera. Each \texttt{txt} file was automatically fetched and parsed, extracting the drone detections and frame indexes. In order to correctly handle the data and perform all the necessary operations, we decided to undistort the drone detections using the intrinsic parameters provided in the dataset at this stage. The intrinsic parameters were loaded from the calibration files provided in the dataset, and the drone detections were undistorted using OpenCV's \texttt{undistortPoints} function.
 
-The undistorted drone detections were then saved in a \texttt{.csv} file, unique for each dataset, with the same columns as the original \texttt{txt} files (frame index, x coordinate, y coordinate) with the addition of the camera index. This allowed us to easily access the drone detections for each camera and perform the necessary operations on them, both in the offline and online trajectory reconstruction algorithms.
+The undistorted drone detections were then saved in a \texttt{csv} file, unique for each dataset, with the same columns as the original \texttt{txt} files (frame index, x coordinate, y coordinate) with the addition of the camera index. This allowed us to easily access the drone detections for each camera and perform the necessary operations on them, both in the offline and online trajectory reconstruction algorithms.
 
 \subsubsection{Temporal shift estimation}
 
@@ -230,7 +230,7 @@ The following step was to compute the essential matrix \textit{E}. Since all the
     E = K_{mc}^T \cdot F \cdot K_{sc}
 \end{equation}
 
-Once we obtained \texttt{E}, it was possible to recover the reciprocal pose of the two cameras thanks to OpenCV's function \texttt{cv.recoverPose}.
+Once we obtained \textit{E}, it was possible to recover the reciprocal pose of the two cameras thanks to OpenCV's function \texttt{cv.recoverPose}.
 
 Since the relative positions could only be determined up to an unknown scale, we set the \texttt{main\_camera} pose at the origin with an identity rotation. All subsequent positions were then expressed relative to the baseline distance between these two cameras.
 
@@ -279,7 +279,7 @@ The paper also suggest the implementation of an online trajectory reconstruction
 In this case, we needed to simulate the stream of data from the cameras, as if it were coming from a real-time video feed. To do this, we choose to use ROS2 as the framework to handle the data stream, and we implemented a ROS2 node that receives the drone detections from every camera and reconstructs the trajectory in real-time.
 To simulate a real-time data stream, we performed the following data preprocessing steps:
 \begin{itemize}
-    \item We loaded the drone detections from the \texttt{.csv} file described in Section~\ref{sec:data_loading}.
+    \item We loaded the drone detections from the \texttt{csv} file described in Section~\ref{sec:data_loading}.
     \item For each camera and each detection, we computed the global timestamp by applying the $\alpha$ and $\beta$ parameters provided in the dataset, ensuring robustness to timing inconsistencies.
     \item We sorted all detections by their global timestamps and created a list of messages to be stored in a ROS2 bag file.
 \end{itemize}
@@ -437,7 +437,7 @@ options:
   --y_limit Y_LIMIT  Y limit for search area (default: 1080)
 \end{verbatim}
 
-This script will save in the \texttt{plots/} folder a \texttt{.mp4} video with the drone detections overlaid on the original video (image \ref{fig:drone_detection} is a frame of this video), a \texttt{json} file with the drone detections, and an image with the analysis of the results of the background subtraction algorithm (image \ref{fig:detection_plots}), and the same set of files for the optical flow algorithm.
+This script will save in the \texttt{plots/} folder a \texttt{mp4} video with the drone detections overlaid on the original video (image \ref{fig:drone_detection} is a frame of this video), a \texttt{json} file with the drone detections, and an image with the analysis of the results of the background subtraction algorithm (image \ref{fig:detection_plots}), and the same set of files for the optical flow algorithm.
 
 \subsection{Offline Trajectory Reconstruction}
 
@@ -449,7 +449,7 @@ To run the $\beta$ search, you can execute the following command:
 python beta_search.py dataset_no
 \end{verbatim}
 
-Where \texttt{dataset\_no} is the number of the dataset you want to use. This script will save in the \texttt{plots/search\_results/} folder all the plots showing the results of the $\beta$ search, and in the main directory a \texttt{.csv} file with the results of the search, named \texttt{beta\_results\_dataset\_X.csv}, where \texttt{X} is the dataset number.
+Where \texttt{dataset\_no} is the number of the dataset you want to use. This script will save in the \texttt{plots/search\_results/} folder all the plots showing the results of the $\beta$ search, and in the main directory a \texttt{csv} file with the results of the search, named \texttt{beta\_results\_dataset\_X.csv}, where \texttt{X} is the dataset number.
 
 To run the trajectory reconstruction, you can execute the following command:
 
@@ -464,7 +464,7 @@ positional arguments:
 
 This script will execute all the steps described in above, saving all the results in the \texttt{plots/} folder. To see the results, in a more interactive way, you can uncomment the very last line of the script, which will display all the intermediate results (Note: this will open a lot of windows, so it is recommended to comment it back after you are done).
 
-Even if it is heavily parallelized, the $\beta$ search is still very time consuming. For this reason, we suggest not to delete the \texttt{.csv} files named \texttt{beta\_results\_dataset\_X.csv}, since the trajectory reconstruction script will automatically load the results from these files, and it will fail if they are not present.
+Even if it is heavily parallelized, the $\beta$ search is still very time consuming. For this reason, we suggest not to delete the \texttt{csv} files named \texttt{beta\_results\_dataset\_X.csv}, since the trajectory reconstruction script will automatically load the results from these files, and it will fail if they are not present.
 
 \subsection{Online Trajectory Reconstruction}
 
@@ -472,7 +472,7 @@ The online trajectory reconstruction is a bit more complex, as it requires ROS2 
 
 The code is structured in a ROS2 package, that has to be put in the \texttt{src/} folder of a ROS2 workspace. For semplicity, we already attached the ROS2 bag file containing the live drone detections, so you can run the online trajectory reconstruction without having to generate the bag file yourself. However, if you want to generate the bag, you can follow the instructions below.
 
-The bag generation can be done by putting the \texttt{.csv} file with the drone detections generated in the offline trajectory reconstruction step in the same location from which you want to run the ROS2 node, and then running the following command:
+The bag generation can be done by putting the \texttt{csv} file with the drone detections generated in the offline trajectory reconstruction step in the same location from which you want to run the ROS2 node, and then running the following command:
 
 \begin{verbatim}
     colcon build
@@ -493,6 +493,8 @@ To run the online trajectory reconstruction, you need to follow these steps (ass
     source install/setup.bash
     ros2 run drones drones
 \end{verbatim}
+
+It is important to select the correct dataset number in the \texttt{drones.py} file, as the code is hardcoded to use the dataset 3 or 4. The dataset number can be changed in the first lines of the \texttt{drones.py} file, where you can also change the parameters of the algorithm.
 
 Then, in another terminal:
 
@@ -521,7 +523,7 @@ The repository contains the following folders and files:
               \item \texttt{bags/}: ROS2 bag files for datasets 3 and 4, used to test the online trajectory reconstruction.
               \item \texttt{config/rviz2\_config.yaml.rviz2}: RViz2 configuration file for visualizing the reconstructed trajectory and camera positions.
               \item \texttt{drones/drones.py}: Main ROS2 node that performs real-time drone trajectory reconstruction.
-              \item \texttt{drones/live\_detections\_generator.py}: ROS2 node that publishes live drone detections from the \texttt{.csv} files.
+              \item \texttt{drones/live\_detections\_generator.py}: ROS2 node that publishes live drone detections from the \texttt{csv} files.
           \end{itemize}
     \item Other files: These include the CSV files listing the $\beta$ values found for each dataset, as well as the main scripts for running the offline trajectory reconstruction and drone detection algorithms.
 \end{itemize}
