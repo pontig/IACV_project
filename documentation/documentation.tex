@@ -158,7 +158,7 @@ The drone detection algorithm was evaluated on some videos from the dataset, and
 
 \begin{itemize}
     \item In the majority of the frames, the algorithm identified the partially visible grass as the drone, because it was moved by the wind. This problem was mitigated by applying a threshold on the area of the detected object, to be set for each video (light blue line in Figure \ref{fig:drone_detection})
-    \item The algorithm often mistook the drone for other moving objects in the scene, such as birds. Unfortunately, this problem could not be solved, as the drone was often too small in the frame to be distinguished from other objects. To partially mitigate this issue, we saved also the velocity of the detected object for each frame (as shown in \ref{fig:detection_plots}), and we think that this information could be used to filter out false positives
+    \item The algorithm often mistook the drone for other moving objects in the scene, such as birds. Unfortunately, this problem could not be solved, as the drone was often too small in the frame to be distinguished from other objects. To partially mitigate this issue, we saved also the velocity of the detected object for each frame (as shown in Figure \ref{fig:detection_plots}), and we think that this information could be used to filter out false positives
     \item The deep learning-based detection algorithm completely removed the false positives, but it was not able to detect the drone in some frames, especially when the drone was too small in the frame, as shown in Figure \ref{fig:yolo_analysis}
 \end{itemize}
 
@@ -361,7 +361,7 @@ Another limitation of the offline trajectory reconstruction is that the process 
 
 This problem triggered a cascade effect: the inaccuracies in the 3D splines led to poor triangulation of new points, which in turn caused further inaccuracies in the camera poses.
 
-In particular, for the reasons above we weren't able to reconstruct the 3D trajectory at all with the offline approach for the dataset3
+In particular, for the reasons above we weren't able to reconstruct the 3D trajectory at all with the offline approach for the dataset 3
 
 \subsection{Online Trajectory Reconstruction}
 
@@ -536,6 +536,8 @@ All the scripts are well commented, so they should be easy to understand and mod
 This project presents a robust and modular implementation of a drone trajectory reconstruction pipeline, inspired by state-of-the-art methods in outside-in tracking with unsynchronized cameras. The implementation covers key components, with careful integration of computer vision tools and frameworks like OpenCV and ROS2. Although the pipeline suffers from several limitations, it demonstrates strong potential for scalable, low-cost UAV tracking in real-world conditions.
 
 Future improvements could focus on refining the bundle adjustment process to incorporate motion regularization, improving robustness to camera variability, and enhancing the detection component for better performance in occluded or low-visibility scenarios. Despite the challenges, this work serves as a strong foundation for further research and development in drone tracking systems using consumer-grade equipment.
+
+{\color{red} commentare la parte sulle riproiezioni sdoppiate nella online mode . fisheye}
 
 \section*{Bulky Plots}
 
