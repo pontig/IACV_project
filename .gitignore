@@ -9,7 +9,7 @@ detections.csv
 logs/
 
 *.npz
-*.mp4
+
 *.webm
 
 # all Latex development files
