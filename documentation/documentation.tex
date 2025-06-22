@@ -382,7 +382,7 @@ The 3D splines were so noisy that the bundle adjustment step actually worsened t
 
 \begin{figure}[h]
     \centering
-    \includegraphics[width=0.5\textwidth]{imgs/online_failed_due_to_ba.png}
+    \includegraphics[width=0.75\textwidth]{imgs/online_failed_due_to_ba.png}
     \caption{Example of the algorithm failing to produce a trajectory due to bundle adjustment introducing too many errors.}
     \label{fig:bad_ba_online_failed}
 \end{figure}
@@ -537,16 +537,14 @@ This project presents a robust and modular implementation of a drone trajectory 
 
 Future improvements could focus on refining the bundle adjustment process to incorporate motion regularization, improving robustness to camera variability, and enhancing the detection component for better performance in occluded or low-visibility scenarios. Despite the challenges, this work serves as a strong foundation for further research and development in drone tracking systems using consumer-grade equipment.
 
-{\color{red} commentare la parte sulle riproiezioni sdoppiate nella online mode . fisheye}
-
 \section*{Bulky Plots}
 
 In order to keep the report clean and readable, we decided to move the bulkiest plots to the end of the document
 
 \begin{figure}[h]
     \centering
-    \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_0_before_ba_.png}
-    \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_0.png}
+    \includegraphics[width=.9\textwidth]{../plots/dataset4/reprojection_analysis_camera_0_before_ba_.png}
+    \includegraphics[width=.9\textwidth]{../plots/dataset4/reprojection_analysis_camera_0.png}
     \caption{Offline approach - Reprojection error analysis for camera 0 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment}
     \label{fig:reprojection_analysis}
 \end{figure}
