@@ -23,3 +23,5 @@ logs/
 *.nav
 *.snm
 *.synctex(busy)
+
+*.zip

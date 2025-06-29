@@ -264,8 +264,8 @@ Once each new camera was registered, we could extend the 3D splines to include t
     \centering
     \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it2_4.0_6.0.png}
     \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it3_5.0_0.0.png}
-    \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it4_4.0_2.0.png}
-    \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it5_6.0_1.0.png}
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it4_6.0_2.0.png}
+    \includegraphics[width=.45\textwidth]{../plots/dataset4/Extension_to_splines_it5_2.0_1.0.png}
     \caption{Example of how the 3D splines are extended with the addition of new cameras (dataset 4). When a new camera is registered, the already existing 3D splines (red) are extended to include the new 3D points (blue)}
     \label{fig:3d_splines_extension}
 \end{figure}
@@ -446,6 +446,27 @@ options:
 \end{verbatim}
 
 This script will save in the \texttt{plots/} folder a \texttt{mp4} video with the drone detections overlaid on the original video (image \ref{fig:drone_detection} is a frame of this video), a \texttt{json} file with the drone detections, and an image with the analysis of the results of the background subtraction algorithm (image \ref{fig:detection_plots}), and the same set of files for the optical flow algorithm.
+
+The yolo detection has been implemented in a separate script, that can be run with the following command:
+
+\begin{verbatim}
+yolo_detection.py [-h] [--model MODEL] [--min_confidence MIN_CONFIDENCE] [--save_video] [--no_video] [--save_frames] dataset camera
+
+YOLO-based drone tracking with comprehensive analysis.
+
+positional arguments:
+  dataset               Dataset number
+  camera                Camera number
+
+options:
+  -h, --help            show this help message and exit
+  --model MODEL         YOLO model path (default: yolov8n.pt)
+  --min_confidence MIN_CONFIDENCE
+                        Minimum detection confidence (default: 0.3)
+  --save_video          Save annotated video output
+  --no_video            Don't save annotated video output
+  --save_frames         Save individual annotated frames
+\end{verbatim}
 
 \subsection{Offline Trajectory Reconstruction}
 
