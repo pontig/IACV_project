@@ -65,7 +65,7 @@ Conventional external tracking systems, such as motion capture setups or theodol
 This project aims to address this challenge by implementing a pipeline for reconstructing the 3D trajectory of a UAV inspired by the work of Li et al.
 
 \subsection{State of the Art}
-This project is inspired by the work by Li et al., that addresses this challenge by introducing a novel method for reconstructing the 3D trajectory of a flying object—such as a UAV—using only videos recorded from an ad-hoc network of unsynchronized, uncalibrated cameras. These cameras, which may have unknown poses, frame rates, and rolling shutter distortion, are placed independently around the flight area. The system relies solely on known intrinsic parameters of each camera (e.g., focal length, distortion) and automatically estimates all other variables—including camera poses, temporal offsets, and rolling shutter effects—during processing.
+This project is inspired by the work by Li et al., that addresses this challenge by introducing a novel method for reconstructing the 3D trajectory of a flying object—such as a UAV—using only videos recorded from an ad-hoc network of unsynchronized, uncalibrated cameras. These cameras, which may have unknown poses, frame rates, and rolling shutter distortion, are placed independently around the flight area. The system relies solely on known intrinsic parameters of each camera and automatically estimates all other variables (including camera poses, temporal offsets, and rolling shutter effects) during processing.
 
 The pipeline begins by detecting the UAV in each video and generating approximate 2D trajectories, which are then used to derive correspondences across cameras. An incremental structure-from-motion strategy is used to compute initial camera poses and triangulate 3D points. The resulting geometry is refined using an extended bundle adjustment that incorporates rolling shutter modeling and motion regularization (e.g., minimizing kinetic energy or force). This allows for highly accurate reconstruction (errors below 40 cm) even when using low-cost consumer cameras like smartphones or action cams.
 
@@ -121,7 +121,7 @@ Below is a detailed description of each aspect of the implementation. We also in
 
 The first step in the pipeline is to calibrate the cameras and obtain their intrinsic parameters. This is crucial for the subsequent steps, as the intrinsic parameters are used to undistort the drone detections and to compute the projection matrices for each camera.
 
-The paper assumes that the cameras are precalibrated, since it is a quite easy task to perform with a chessboard pattern. However, for the completeness of the project, we decided to implement a simple yet effective camera intrinsic calibration method, based on the OpenCV library.
+The paper assumes that the cameras are precalibrated, since it is a quite easy task to perform with a chessboard pattern. However, for the completeness of the project, we decided to implement a simple yet effective camera intrinsic calibration method.
 
 The calibration process follows Zhang et al.'s method, which uses a chessboard pattern to estimate the intrinsic parameters of the camera. All the necessary steps are already implemented in the OpenCV library, so we only had to write a simple script to load the images, detect the chessboard corners, compute the intrinsic parameters, and output a couple of files containing the comparison between the computed intrinsic parameters and the ground truth values provided in the dataset.
 
@@ -187,6 +187,14 @@ The next step was to reconstruct the drone's trajectory by loading all the detec
 
 The first step was to load the drone detections from the dataset. The dataset provides the drone detections in various \texttt{txt} files, divided in the repo by dataset and camera. Each \texttt{txt} file was automatically fetched and parsed, extracting the drone detections and frame indexes. In order to correctly handle the data and perform all the necessary operations, we decided to undistort the drone detections using the intrinsic parameters provided in the dataset at this stage. The intrinsic parameters were loaded from the calibration files provided in the dataset, and the drone detections were undistorted using OpenCV's \texttt{undistortPoints} function.
 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=.35\textwidth]{../plots/dataset4/cam0_undistorted.jpg}
+    \includegraphics[width=.35\textwidth]{../plots/dataset4/cam0_undistorted_optimal.jpg}
+    \caption{Example of the undistorted drone detections (dataset 4, camera 0)}
+    \label{fig:undistorted_detections}
+\end{figure}
+
 The undistorted drone detections were then saved in a \texttt{csv} file, unique for each dataset, with the same columns as the original \texttt{txt} files (frame index, x coordinate, y coordinate) with the addition of the camera index. This allowed us to easily access the drone detections for each camera and perform the necessary operations on them, both in the offline and online trajectory reconstruction algorithms.
 
 \subsubsection{Temporal shift estimation}
@@ -209,7 +217,7 @@ An example of the results of this algorithm is shown in Figure \ref{fig:beta_sea
 
 \begin{figure}[h]
     \centering
-    \includegraphics[width=\textwidth]{../plots/search_results/dataset4/inliers_vs_beta_combined_cam0-5_ds4.png}
+    \includegraphics[width=.75\textwidth]{../plots/search_results/dataset4/inliers_vs_beta_combined_cam0-5_ds4.png}
     \caption{Example of the results of the temporal shift estimation algorithm (dataset 4, cameras 0-5). The x-axis shows the temporal shift $\beta$ in seconds, while the y-axis shows the number of inliers found for each candidate value of $\beta$. It is clear that the algorithm finds a peak in the number of inliers for a specific value of $\beta$, which is the best temporal shift between the two cameras.}
     \label{fig:beta_search}
 \end{figure}
@@ -449,7 +457,7 @@ To run the $\beta$ search, you can execute the following command:
 python beta_search.py dataset_no
 \end{verbatim}
 
-Where \texttt{dataset\_no} is the number of the dataset you want to use. This script will save in the \texttt{plots/search\_results/} folder all the plots showing the results of the $\beta$ search, and in the main directory a \texttt{csv} file with the results of the search, named \texttt{beta\_results\_dataset\_X.csv}, where \texttt{X} is the dataset number.
+Where \texttt{dataset\_no} is the number of the dataset you want to use. This script will save in the \texttt{plots/search\_results/} folder all the plots showing the results of the $\beta$ search, and in the main directory a \texttt{csv} file with the results of the search, named \texttt{beta\_results\_dataset\_X.csv}, where \texttt{X} is the dataset number. The run of this script is not strictly necessary, since it is not strictly a computer vision task, but it is essential for the trajectory reconstruction step, as it provides the temporal shifts between cameras that are needed to align the drone detections.
 
 To run the trajectory reconstruction, you can execute the following command:
 
@@ -470,7 +478,7 @@ Even if it is heavily parallelized, the $\beta$ search is still very time consum
 
 The online trajectory reconstruction is a bit more complex, as it requires ROS2 to be installed and running.
 
-The code is structured in a ROS2 package, that has to be put in the \texttt{src/} folder of a ROS2 workspace. For semplicity, we already attached the ROS2 bag file containing the live drone detections, so you can run the online trajectory reconstruction without having to generate the bag file yourself. However, if you want to generate the bag, you can follow the instructions below.
+The code is structured in a ROS2 package, that has to be put in the \texttt{src/} folder of a ROS2 workspace. For simplicity, we already attached the ROS2 bag file containing the live drone detections, so you can run the online trajectory reconstruction without having to generate the bag file yourself. However, if you want to generate the bag, you can follow the instructions below.
 
 The bag generation can be done by putting the \texttt{csv} file with the drone detections generated in the offline trajectory reconstruction step in the same location from which you want to run the ROS2 node, and then running the following command:
 
@@ -543,8 +551,8 @@ In order to keep the report clean and readable, we decided to move the bulkiest 
 
 \begin{figure}[h]
     \centering
-    \includegraphics[width=.9\textwidth]{../plots/dataset4/reprojection_analysis_camera_0_before_ba_.png}
-    \includegraphics[width=.9\textwidth]{../plots/dataset4/reprojection_analysis_camera_0.png}
+    \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_0_before_ba_.png}
+    \includegraphics[width=\textwidth]{../plots/dataset4/reprojection_analysis_camera_0.png}
     \caption{Offline approach - Reprojection error analysis for camera 0 (dataset 4). The top plot shows the reprojection error before the bundle adjustment, while the bottom plot shows the reprojection error after the bundle adjustment}
     \label{fig:reprojection_analysis}
 \end{figure}

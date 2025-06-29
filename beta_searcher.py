@@ -273,6 +273,6 @@ df, splines, contiguous, camera_info = load_dataframe(cameras, DATASET_NO)
 
 first_beta_search(
     dataset_no=DATASET_NO,
-    beta_shift=2000
+    beta_shift=5000
 )
 logging.info("Beta search completed")
